@@ -8,10 +8,11 @@
       "!**/*.mdx",
       "!**/*.yml",
       "!**/*.yaml",
-      "!**/dist",
-      "!**/.turbo",
       "!**/.artifacts",
-      "!**/.gpr"
+      "!**/.turbo",
+      "!**/.gpr",
+      "!**/dist",
+      "!**/temp"
     ],
     "ignoreUnknown": true
   },
