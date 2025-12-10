@@ -1,0 +1,57 @@
+# Output directories
+dist
+.wrangler
+.output
+.vercel
+.netlify
+.vinxi
+.astro
+.gpr
+.artifact
+.artifacts
+.tsbuildinfo
+app.config.timestamp_*.js
+app.config.timestamp_*.js
+.tsbuildinfo
+
+# Environment
+.env
+.env*.local
+
+# Dependencies
+node_modules/
+
+# Package manager lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+shrinkwrap.yaml
+.turbo/
+nx.json
+npm-shrinkwrap.json
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+*.launch
+.settings/
+
+# Temp
+gitignore
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Temporary files and directories
+.temp/
+temp/
+*.tmp
+*.temp
+
+# Wakatime
+.wakatime-project
+
