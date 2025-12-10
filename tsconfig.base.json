@@ -1,18 +1,36 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2020", "DOM"],
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+
     "strict": true,
-    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "useUnknownInCatchVariables": true,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitThis": true,
+
     "resolveJsonModule": true,
-    "declaration": true,
-    "sourceMap": true,
-    "types": [],
-    "noEmit": true,
+    "allowJs": false,
+    "checkJs": false,
+    "isolatedModules": true,
+
     "verbatimModuleSyntax": true,
-    "composite": true,
-    "incremental": true
-  }
+    "exactOptionalPropertyTypes": true,
+
+    "skipLibCheck": true,
+
+    "esModuleInterop": false,
+    "forceConsistentCasingInFileNames": true,
+
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": ["dist", ".artifacts", "node_modules"]
 }
