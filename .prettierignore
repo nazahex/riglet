@@ -1,0 +1,15 @@
+*.temp
+
+# All files below are maintained by Biome.
+*.js
+*.cjs
+*.mjs
+*.jsx
+*.d.ts
+*.ts
+*.cts
+*.mts
+*.tsx
+*.css
+*.json
+*.jsonc
