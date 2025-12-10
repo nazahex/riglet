@@ -18,4 +18,4 @@ pre-commit:
 pre-push:
   commands:
     total-check:
-      run: bun run clean && bun run build && bun run test && bun run lint && bun run format:check
+      run: bun run ci
