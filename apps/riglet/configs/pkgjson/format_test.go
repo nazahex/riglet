@@ -128,3 +128,64 @@ func TestFormatFile_CustomAuthorOrder(t *testing.T) {
 		last = idx
 	}
 }
+
+func TestFormatFile_Scripts_BlankLinePreservedOnce(t *testing.T) {
+	d := t.TempDir()
+	p := filepath.Join(d, "package.json")
+	// scripts entries with two blank lines between them; expect single blank line after formatting
+	if err := os.WriteFile(p, []byte("{\n"+
+		"  \"name\": \"x\",\n"+
+		"  \"scripts\": {\n"+
+		"    \"build\": \"echo build\",\n\n\n"+
+		"    \"start\": \"echo start\"\n"+
+		"  }\n"+
+		"}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := FormatFile(p, Options{IsRoot: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	scrStart := strings.Index(s, "\"scripts\": {")
+	if scrStart < 0 {
+		t.Fatalf("scripts section not found: %s", s)
+	}
+	scrEnd := strings.Index(s[scrStart:], "}")
+	if scrEnd < 0 {
+		t.Fatalf("scripts section not closed: %s", s)
+	}
+	seg := s[scrStart : scrStart+scrEnd]
+	// Should contain exactly one blank line between entries (",\n\n\n" should be compressed to ",\n\n")
+	if strings.Count(seg, ",\n\n") != 1 {
+		t.Fatalf("expected a single blank line between script entries, got: %q", seg)
+	}
+}
+
+func TestFormatFile_Scripts_NoExtraBlankLine(t *testing.T) {
+	d := t.TempDir()
+	p := filepath.Join(d, "package.json")
+	if err := os.WriteFile(p, []byte(`{
+		"name":"x",
+		"scripts": {"a":"1","b":"2"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := FormatFile(p, Options{IsRoot: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	scrStart := strings.Index(s, `"scripts": {`)
+	if scrStart < 0 {
+		t.Fatalf("scripts section not found: %s", s)
+	}
+	scrEnd := strings.Index(s[scrStart:], `}`)
+	if scrEnd < 0 {
+		t.Fatalf("scripts section not closed: %s", s)
+	}
+	seg := s[scrStart : scrStart+scrEnd]
+	if strings.Contains(seg, ",\n\n") {
+		t.Fatalf("did not expect blank line between tightly written script entries, got: %q", seg)
+	}
+}

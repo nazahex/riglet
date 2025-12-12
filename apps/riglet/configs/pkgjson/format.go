@@ -85,9 +85,15 @@ func FormatFile(path string, opts Options) ([]byte, error) {
 	// Preserve original order for scripts by reading keys from raw JSON
 	if v, ok := m["scripts"]; ok {
 		if mm, ok := v.(map[string]any); ok {
-			if ordered := orderedFieldKeys(b, "scripts"); len(ordered) > 0 {
-				kvs := make([]kv, 0, len(mm))
-				for _, k := range ordered {
+			keys, seps := orderedFieldKeysWithSeps(b, "scripts")
+			if len(keys) > 0 {
+				kvs := make([]kv, 0, len(mm)*2)
+				for i, k := range keys {
+					if i > 0 {
+						if seps[i] {
+							kvs = append(kvs, kv{sep: true})
+						}
+					}
 					if val, exists := mm[k]; exists {
 						kvs = append(kvs, kv{key: k, val: normalizeValue(val)})
 					}
@@ -95,7 +101,7 @@ func FormatFile(path string, opts Options) ([]byte, error) {
 				// append any remaining keys not found (edge cases)
 				for k, val := range mm {
 					found := false
-					for _, okk := range ordered {
+					for _, okk := range keys {
 						if okk == k {
 							found = true
 							break
@@ -492,6 +498,188 @@ func orderedFieldKeys(raw []byte, field string) []string {
 		}
 	}
 	return nil
+}
+
+// orderedFieldKeysWithSeps returns ordered keys for a top-level field and a map of positions
+// indicating whether there was at least one blank line between the previous entry and this one.
+// This preserves user-intended spacing inside objects like `scripts` while capping to one.
+func orderedFieldKeysWithSeps(raw []byte, field string) ([]string, map[int]bool) {
+	// Find the slice corresponding to the object's text for `field`
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, nil
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return nil, nil
+	}
+	// We cannot get offsets from json.Decoder, so fall back to a textual scan
+	// to locate the target field and capture its raw substring.
+	// Strategy: find '"field"' then the next '{' and parse until its matching '}'.
+	txt := string(raw)
+	fldIdx := strings.Index(txt, "\""+field+"\"")
+	if fldIdx < 0 {
+		return nil, nil
+	}
+	// Find opening brace after colon
+	after := txt[fldIdx:]
+	colon := strings.Index(after, ":")
+	if colon < 0 {
+		return nil, nil
+	}
+	objStartRel := strings.Index(after[colon+1:], "{")
+	if objStartRel < 0 {
+		return nil, nil
+	}
+	objStart := fldIdx + colon + 1 + objStartRel
+	// Find matching closing brace with a simple brace counter, respecting strings
+	i := objStart
+	depth := 0
+	inStr := false
+	esc := false
+	for i < len(txt) {
+		ch := txt[i]
+		if inStr {
+			if esc {
+				esc = false
+			} else if ch == '\\' {
+				esc = true
+			} else if ch == '"' {
+				inStr = false
+			}
+			i++
+			continue
+		}
+		if ch == '"' {
+			inStr = true
+			i++
+			continue
+		}
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+			if depth == 0 {
+				break
+			}
+		}
+		i++
+	}
+	if depth != 0 {
+		return nil, nil
+	}
+	objEnd := i
+	obj := txt[objStart : objEnd+1]
+	// Now scan top-level keys inside obj and detect blank lines between entries.
+	// We'll find occurrences of key tokens: "key" followed by optional spaces and ':' at object depth 1.
+	keys := []string{}
+	seps := map[int]bool{}
+	// Simple scanner with string awareness and depth.
+	idx := 0
+	depth2 := 0
+	inStr2 := false
+	esc2 := false
+	lastMemberEnd := -1
+	for idx < len(obj) {
+		ch := obj[idx]
+		if inStr2 {
+			if esc2 {
+				esc2 = false
+			} else if ch == '\\' {
+				esc2 = true
+			} else if ch == '"' {
+				inStr2 = false
+			}
+			idx++
+			continue
+		}
+		if ch == '"' {
+			inStr2 = true
+			// Potential start of a key only if depth2==1 and previous char indicates member start
+			// Verify it's a key by looking ahead for closing '"' then ':'
+			keyStart := idx
+			// read string literal
+			idx++
+			sb := &strings.Builder{}
+			escK := false
+			for idx < len(obj) {
+				c := obj[idx]
+				if escK {
+					sb.WriteByte(c)
+					escK = false
+				} else if c == '\\' {
+					escK = true
+				} else if c == '"' {
+					break
+				} else {
+					sb.WriteByte(c)
+				}
+				idx++
+			}
+			if idx >= len(obj) {
+				break
+			}
+			// idx now at closing '"'
+			key := sb.String()
+			// Look ahead for ':' ignoring spaces
+			j := idx + 1
+			for j < len(obj) && (obj[j] == ' ' || obj[j] == '\n' || obj[j] == '\r' || obj[j] == '\t') {
+				j++
+			}
+			if j < len(obj) && obj[j] == ':' {
+				// This is a key; ensure depth2==1
+				if depth2 == 1 {
+					// Determine if there was a blank line since lastMemberEnd
+					if lastMemberEnd >= 0 {
+						segment := obj[lastMemberEnd:keyStart]
+						// Blank line defined as occurrence of two newlines with only whitespace between
+						if hasBlankLine(segment) {
+							seps[len(keys)] = true
+						}
+					}
+					keys = append(keys, key)
+				}
+			}
+			// Continue parsing; do not consume ':' here
+			continue
+		}
+		if ch == '{' {
+			depth2++
+		} else if ch == '}' {
+			if depth2 == 1 {
+				// end of member list; mark last end
+				lastMemberEnd = idx
+			}
+			depth2--
+		} else if ch == ',' {
+			// Member separator at depth1
+			if depth2 == 1 {
+				lastMemberEnd = idx + 1
+			}
+		}
+		idx++
+	}
+	return keys, seps
+}
+
+func hasBlankLine(s string) bool {
+	// Normalize CRLF to LF
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	// Look for \n whitespace \n
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] == '\n' {
+			// skip spaces/tabs
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+				j++
+			}
+			if j < len(s) && s[j] == '\n' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // skipValue consumes the next JSON value from decoder
