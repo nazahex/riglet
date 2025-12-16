@@ -1,0 +1,194 @@
+//! Lint runner for policy checks and order validation.
+//!
+//! Produces a `LintResult` with issues and a summary. Order lint uses
+//! `policy.order` with optional `message` and `level` per policy.
+
+use crate::checks::run_checks;
+use crate::models::index::{Index, RuleIndex};
+use crate::models::policy::Policy;
+use crate::models::{Issue, LintResult, Summary};
+use glob::glob;
+use serde_json::Value as Json;
+use std::fs;
+use std::path::PathBuf;
+
+/// Run lint across files matched by the index.
+///
+/// - Executes validation checks declared in the policy.
+/// - Verifies top-level key order when `order` is present.
+///
+/// Severity accounting contributes to the final summary; `level = "error"`
+/// affects the error count and typical CI exit behavior upstream.
+pub fn run_lint(repo_root: &str, index_path: &str) -> LintResult {
+    let root = PathBuf::from(repo_root);
+    let idx_path = root.join(index_path);
+    let idx_str = match fs::read_to_string(&idx_path) {
+        Ok(s) => s,
+        Err(_) => {
+            return LintResult {
+                issues: vec![Issue {
+                    file: idx_path.to_string_lossy().to_string(),
+                    rule: "load-index".into(),
+                    severity: "error".into(),
+                    path: "$".into(),
+                    message: format!(
+                        "Index file not found. Looked at '{}'. Pass --index or add rigra.{{toml,yaml}}.",
+                        idx_path.to_string_lossy()
+                    ),
+                }],
+                summary: Summary {
+                    errors: 1,
+                    warnings: 0,
+                    infos: 0,
+                    files: 0,
+                },
+            };
+        }
+    };
+    let index: Index = match toml::from_str(&idx_str) {
+        Ok(ix) => ix,
+        Err(_) => {
+            return LintResult {
+                issues: vec![Issue {
+                    file: idx_path.to_string_lossy().to_string(),
+                    rule: "parse-index".into(),
+                    severity: "error".into(),
+                    path: "$".into(),
+                    message: "Index file is not valid TOML".into(),
+                }],
+                summary: Summary {
+                    errors: 1,
+                    warnings: 0,
+                    infos: 0,
+                    files: 0,
+                },
+            };
+        }
+    };
+
+    let mut issues: Vec<Issue> = Vec::new();
+    let mut files_count: usize = 0;
+
+    for ri in index.rules {
+        lint_rule(&root, &idx_path, ri, &mut issues, &mut files_count);
+    }
+
+    let mut errs = 0usize;
+    let mut warns = 0usize;
+    let mut infos = 0usize;
+    for is in &issues {
+        match is.severity.as_str() {
+            "error" => errs += 1,
+            "warning" => warns += 1,
+            _ => infos += 1,
+        }
+    }
+    LintResult {
+        issues,
+        summary: Summary {
+            errors: errs,
+            warnings: warns,
+            infos,
+            files: files_count,
+        },
+    }
+}
+
+/// Lint a single indexed rule against its targets, collecting issues.
+fn lint_rule(
+    root: &PathBuf,
+    idx_path: &PathBuf,
+    ri: RuleIndex,
+    issues: &mut Vec<Issue>,
+    files_count: &mut usize,
+) {
+    let pol_path = idx_path.parent().unwrap().join(&ri.policy);
+    let pol_str = match fs::read_to_string(&pol_path) {
+        Ok(s) => s,
+        Err(_) => {
+            issues.push(Issue {
+                file: pol_path.to_string_lossy().to_string(),
+                rule: ri.id.clone(),
+                severity: "error".into(),
+                path: "$".into(),
+                message: format!(
+                    "Policy file not found for rule '{}': {}",
+                    ri.id,
+                    pol_path.to_string_lossy()
+                ),
+            });
+            return;
+        }
+    };
+    let policy: Policy = match toml::from_str(&pol_str) {
+        Ok(p) => p,
+        Err(_) => {
+            issues.push(Issue {
+                file: pol_path.to_string_lossy().to_string(),
+                rule: ri.id.clone(),
+                severity: "error".into(),
+                path: "$".into(),
+                message: "Policy file is not valid TOML".into(),
+            });
+            return;
+        }
+    };
+
+    let mut targets: Vec<PathBuf> = Vec::new();
+    for pat in ri.patterns.iter() {
+        let abs_glob = root.join(pat);
+        let pattern = abs_glob.to_string_lossy().to_string();
+        for entry in glob(&pattern).expect("bad glob pattern") {
+            if let Ok(p) = entry {
+                targets.push(p);
+            }
+        }
+    }
+
+    for path in targets {
+        *files_count += 1;
+        let data = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let json: Json = match serde_json::from_str(&data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let mut found = run_checks(&policy.checks, &json, &path, &ri.id);
+        issues.append(&mut found);
+
+        // Order lint: compare actual key order with policy.order expectations (top-level only)
+        if let Some(ord) = policy.order.as_ref() {
+            if let Json::Object(obj) = &json {
+                let actual: Vec<String> = obj.keys().cloned().collect();
+                let mut expected: Vec<String> = Vec::new();
+                for group in &ord.top {
+                    for key in group {
+                        if obj.contains_key(key) {
+                            expected.push(key.clone());
+                        }
+                    }
+                }
+                let mut rest: Vec<String> = obj
+                    .keys()
+                    .filter(|k| !expected.contains(k))
+                    .cloned()
+                    .collect();
+                rest.sort();
+                expected.extend(rest);
+                if expected != actual {
+                    issues.push(Issue {
+                        file: path.to_string_lossy().to_string(),
+                        rule: ri.id.clone(),
+                        severity: ord.level.clone().unwrap_or_else(|| "error".to_string()),
+                        path: "$".to_string(),
+                        message: ord.message.clone().unwrap_or_else(|| {
+                            "Object key order does not match policy".to_string()
+                        }),
+                    });
+                }
+            }
+        }
+    }
+}
