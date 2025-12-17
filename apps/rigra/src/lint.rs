@@ -8,6 +8,7 @@ use crate::models::index::{Index, RuleIndex};
 use crate::models::policy::Policy;
 use crate::models::{Issue, LintResult, Summary};
 use glob::glob;
+use rayon::prelude::*;
 use serde_json::Value as Json;
 use std::fs;
 use std::path::PathBuf;
@@ -145,50 +146,57 @@ fn lint_rule(
         }
     }
 
-    for path in targets {
-        *files_count += 1;
-        let data = match fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let json: Json = match serde_json::from_str(&data) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let mut found = run_checks(&policy.checks, &json, &path, &ri.id);
-        issues.append(&mut found);
-
-        // Order lint: compare actual key order with policy.order expectations (top-level only)
-        if let Some(ord) = policy.order.as_ref() {
-            if let Json::Object(obj) = &json {
-                let actual: Vec<String> = obj.keys().cloned().collect();
-                let mut expected: Vec<String> = Vec::new();
-                for group in &ord.top {
-                    for key in group {
-                        if obj.contains_key(key) {
-                            expected.push(key.clone());
+    let mut per_file: Vec<(Vec<Issue>, usize)> = targets
+        .par_iter()
+        .map(|path| {
+            let data = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => return (Vec::new(), 0),
+            };
+            let json: Json = match serde_json::from_str(&data) {
+                Ok(v) => v,
+                Err(_) => return (Vec::new(), 0),
+            };
+            let mut file_issues: Vec<Issue> = Vec::new();
+            let mut found = run_checks(&policy.checks, &json, path, &ri.id);
+            file_issues.append(&mut found);
+            if let Some(ord) = policy.order.as_ref() {
+                if let Json::Object(obj) = &json {
+                    let actual: Vec<String> = obj.keys().cloned().collect();
+                    let mut expected: Vec<String> = Vec::new();
+                    for group in &ord.top {
+                        for key in group {
+                            if obj.contains_key(key) {
+                                expected.push(key.clone());
+                            }
                         }
                     }
-                }
-                let mut rest: Vec<String> = obj
-                    .keys()
-                    .filter(|k| !expected.contains(k))
-                    .cloned()
-                    .collect();
-                rest.sort();
-                expected.extend(rest);
-                if expected != actual {
-                    issues.push(Issue {
-                        file: path.to_string_lossy().to_string(),
-                        rule: ri.id.clone(),
-                        severity: ord.level.clone().unwrap_or_else(|| "error".to_string()),
-                        path: "$".to_string(),
-                        message: ord.message.clone().unwrap_or_else(|| {
-                            "Object key order does not match policy".to_string()
-                        }),
-                    });
+                    let mut rest: Vec<String> = obj
+                        .keys()
+                        .filter(|k| !expected.contains(k))
+                        .cloned()
+                        .collect();
+                    rest.sort();
+                    expected.extend(rest);
+                    if expected != actual {
+                        file_issues.push(Issue {
+                            file: path.to_string_lossy().to_string(),
+                            rule: ri.id.clone(),
+                            severity: ord.level.clone().unwrap_or_else(|| "error".to_string()),
+                            path: "$".to_string(),
+                            message: ord.message.clone().unwrap_or_else(|| {
+                                "Object key order does not match policy".to_string()
+                            }),
+                        });
+                    }
                 }
             }
-        }
-    }
+            (file_issues, 1)
+        })
+        .collect();
+    // Deterministic ordering of issues by file then message
+    let mut combined: Vec<Issue> = per_file.iter_mut().flat_map(|(v, _)| v.drain(..)).collect();
+    combined.sort_by(|a, b| a.file.cmp(&b.file).then(a.message.cmp(&b.message)));
+    *files_count += per_file.iter().map(|(_, c)| *c).sum::<usize>();
+    issues.extend(combined);
 }
