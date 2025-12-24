@@ -42,6 +42,8 @@ pub struct RigletConfig {
     pub scope: Option<String>,
     pub output: Option<String>,
     pub format: Option<FormatCfg>,
+    #[serde(default)]
+    pub rules: Option<std::collections::HashMap<String, RulePatternOverride>>, // [rules.<id>].patterns
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,7 @@ pub struct RigletConfig {
 pub struct Effective {
     pub repo_root: PathBuf,
     pub index: String,
+    pub index_configured: bool,
     pub scope: String,
     pub output: String,
     pub write: bool,
@@ -58,6 +61,12 @@ pub struct Effective {
     pub lb_between_groups: Option<bool>,
     pub lb_before_fields: std::collections::HashMap<String, String>,
     pub lb_in_fields: std::collections::HashMap<String, String>,
+    pub pattern_overrides: std::collections::HashMap<String, Vec<String>>, // id -> patterns
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct RulePatternOverride {
+    pub patterns: Vec<String>,
 }
 
 /// Walk upward from `start` to detect the repository root.
@@ -116,10 +125,10 @@ pub fn resolve_effective(
     let repo_root = detect_repo_root(&start);
     let cfg = load_config(&repo_root).unwrap_or_default();
 
-    let index = cli_index
-        .map(|s| s.to_string())
-        .or(cfg.index)
-        .unwrap_or_else(|| "convention/index.toml".to_string());
+    let (index, index_configured) = match cli_index.map(|s| s.to_string()).or(cfg.index) {
+        Some(s) => (s, true),
+        None => (String::new(), false),
+    };
 
     let scope = cli_scope
         .map(|s| s.to_string())
@@ -160,9 +169,18 @@ pub fn resolve_effective(
         .and_then(|f| f.linebreak.as_ref()?.in_fields.clone())
         .unwrap_or_default();
 
+    // rules pattern overrides: support map form [rules.<id>].patterns
+    let pattern_overrides = cfg
+        .rules
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, ov)| (id, ov.patterns))
+        .collect::<std::collections::HashMap<_, _>>();
+
     Effective {
         repo_root,
         index,
+        index_configured,
         scope,
         output,
         write,
@@ -172,6 +190,7 @@ pub fn resolve_effective(
         lb_between_groups,
         lb_before_fields,
         lb_in_fields,
+        pattern_overrides,
     }
 }
 
