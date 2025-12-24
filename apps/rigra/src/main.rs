@@ -97,6 +97,7 @@ fn main() {
             let result = lint::run_lint(
                 eff.repo_root.to_str().unwrap(),
                 &eff.index,
+                &eff.scope,
                 &eff.pattern_overrides,
             );
             output::print_lint(&result, &eff.output);
