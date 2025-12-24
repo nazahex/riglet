@@ -4,6 +4,7 @@
 mod checks;
 mod cli;
 mod config;
+mod conv;
 mod format;
 mod lint;
 mod models;
@@ -234,6 +235,141 @@ fn main() {
             }
             let actions = sync::run_sync(eff.repo_root.to_str().unwrap(), &eff.index, &eff.scope);
             output::print_sync(&actions, &eff.output);
+        }
+        Commands::Conv { cmd } => {
+            match cmd {
+                cli::ConvCmd::Install {
+                    repo_root,
+                    source,
+                    name,
+                } => {
+                    let eff = config::resolve_effective(
+                        repo_root.as_deref(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    // Prefer CLI overrides; otherwise pull from rigra.toml [conv]
+                    let cfg = config::load_config(&eff.repo_root).unwrap_or_default();
+                    let cfg_conv = cfg.conv.as_ref();
+
+                    // Determine name@ver
+                    let name_ver = if let Some(nv) = name {
+                        nv
+                    } else if let Some(pkg) = cfg_conv.and_then(|c| c.package.clone()) {
+                        if pkg.rsplit_once('@').is_some() {
+                            pkg
+                        } else {
+                            eprintln!("[conv.package] must include @version");
+                            std::process::exit(2);
+                        }
+                    } else if let Some(src) = source.as_ref().and_then(|s| conv::parse_source(s)) {
+                        match src {
+                            conv::Source::Gh {
+                                owner: _,
+                                repo,
+                                tag,
+                            } => format!("{}@{}", repo, tag),
+                            _ => {
+                                eprintln!("--name is required when using file: source without [conv.package]");
+                                std::process::exit(2);
+                            }
+                        }
+                    } else {
+                        eprintln!("missing install context: set [conv.package] in rigra.toml or pass --name");
+                        std::process::exit(2);
+                    };
+
+                    // Determine source string
+                    let src_str = if let Some(s) = source {
+                        s
+                    } else if let Some(s) = cfg_conv.and_then(|c| c.source.clone()) {
+                        s
+                    } else {
+                        eprintln!(
+                            "missing source: set [conv.source] in rigra.toml or pass --source"
+                        );
+                        std::process::exit(2);
+                    };
+                    // If shorthand "github" is used, derive gh:owner/repo@tag from package
+                    let src_str = if src_str == "github" {
+                        if let Some((name, ver)) = crate::config::rsplit_once_at(&name_ver, '@') {
+                            if let Some((owner, repo)) = crate::config::package_owner_repo(name) {
+                                format!("gh:{}/{}@{}", owner, repo, ver)
+                            } else {
+                                src_str
+                            }
+                        } else {
+                            src_str
+                        }
+                    } else {
+                        src_str
+                    };
+
+                    match conv::install(&eff.repo_root, &name_ver, &src_str) {
+                        Ok(path) => println!("installed: {}", path.to_string_lossy()),
+                        Err(e) => {
+                            eprintln!("install failed: {}", e);
+                            std::process::exit(2);
+                        }
+                    }
+                }
+                cli::ConvCmd::Ls { repo_root } => {
+                    let eff = config::resolve_effective(
+                        repo_root.as_deref(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    for it in conv::list(&eff.repo_root) {
+                        println!("{}", it);
+                    }
+                }
+                cli::ConvCmd::Prune { repo_root } => {
+                    let eff = config::resolve_effective(
+                        repo_root.as_deref(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    if let Err(e) = conv::prune(&eff.repo_root) {
+                        eprintln!("prune failed: {}", e);
+                        std::process::exit(2);
+                    } else {
+                        println!("pruned");
+                    }
+                }
+                cli::ConvCmd::Path {
+                    repo_root,
+                    conv: conv_str,
+                } => {
+                    let eff = config::resolve_effective(
+                        repo_root.as_deref(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    if let Some(cr) = conv::parse_conv_ref(&conv_str) {
+                        let p = conv::resolve_path(&eff.repo_root, &cr);
+                        println!("{}", p.to_string_lossy());
+                    } else {
+                        eprintln!("invalid conv string");
+                        std::process::exit(2);
+                    }
+                }
+            }
         }
     }
 }
