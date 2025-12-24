@@ -51,6 +51,12 @@ pub enum Commands {
         output: Option<String>,
         #[arg(long)]
         index: Option<String>,
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        write: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Preview planned writes without changing files")]
+        dry_run: bool,
+        #[arg(long, action = clap::ArgAction::SetTrue, help = "Exit non-zero if changes would occur")]
+        check: bool,
     },
     /// Convention management (install/list/prune/path)
     Conv {
