@@ -78,6 +78,18 @@ pub fn print_lint(res: &LintResult, output: &str) {
                     println!("  {} {} {} ❲{}❳ — {}", icon, sev, base, is.rule, is.message);
                 }
             }
+            // Emit pass message when there are no errors or warnings
+            if res.summary.errors == 0 && res.summary.warnings == 0 {
+                if color {
+                    println!(
+                        "{} {}",
+                        "✔ ⟦perfect⟧".green().bold(),
+                        "Validation passed. No convention violations detected."
+                    );
+                } else {
+                    println!("✔ ⟦perfect⟧ Validation passed. No convention violations detected.");
+                }
+            }
             let summary = format!(
                 "— Summary — errors={} warnings={} infos={} files={}",
                 res.summary.errors, res.summary.warnings, res.summary.infos, res.summary.files
@@ -173,6 +185,21 @@ pub fn print_sync(actions: &[SyncAction], output: &str) {
         }
         _ => {
             let color = use_colors(output);
+            // If nothing changed or pending, emit a concise info message
+            let wrote_count = actions.iter().filter(|a| a.wrote).count();
+            let pending_count = actions.iter().filter(|a| a.would_write).count();
+            if wrote_count == 0 && pending_count == 0 {
+                if color {
+                    println!(
+                        "{} {}",
+                        "◆ ⟦stable⟧".blue().bold(),
+                        "Everything up to date. No changes to sync."
+                    );
+                } else {
+                    println!("◆ ⟦stable⟧ Everything up to date. No changes to sync.");
+                }
+                return;
+            }
             // Helper to shorten long convention cache paths
             let shorten = |p: &str| -> String {
                 if let Some(pos) = p.find("/.rigra/conv/") {
