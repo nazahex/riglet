@@ -44,6 +44,8 @@ pub struct RigletConfig {
     pub format: Option<FormatCfg>,
     #[serde(default)]
     pub rules: Option<std::collections::HashMap<String, RulePatternOverride>>, // [rules.<id>].patterns
+    #[serde(default)]
+    pub conv: Option<ConvCfg>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,18 @@ pub struct Effective {
 #[derive(Debug, Default, Deserialize, Clone)]
 pub struct RulePatternOverride {
     pub patterns: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct ConvCfg {
+    #[serde(rename = "autoInstall")]
+    pub auto_install: Option<bool>,
+    /// Package identifier with version, e.g. "@nazahex/conv-lib-ts-mono@v0.1.0" or "myconv@v0.1.0"
+    pub package: Option<String>,
+    /// Single source of truth for installation: "gh:owner/repo@tag" or "file:/abs/path.tar.gz"
+    pub source: Option<String>,
+    /// Optional default subpath inside archive (defaults to "index.toml")
+    pub subpath: Option<String>,
 }
 
 /// Walk upward from `start` to detect the repository root.
@@ -125,7 +139,8 @@ pub fn resolve_effective(
     let repo_root = detect_repo_root(&start);
     let cfg = load_config(&repo_root).unwrap_or_default();
 
-    let (index, index_configured) = match cli_index.map(|s| s.to_string()).or(cfg.index) {
+    let index_src = cli_index.map(|s| s.to_string()).or(cfg.index);
+    let (mut index, mut index_configured) = match index_src.clone() {
         Some(s) => (s, true),
         None => (String::new(), false),
     };
@@ -177,6 +192,71 @@ pub fn resolve_effective(
         .map(|(id, ov)| (id, ov.patterns))
         .collect::<std::collections::HashMap<_, _>>();
 
+    // Conv config
+    let conv_auto_install = cfg
+        .conv
+        .as_ref()
+        .and_then(|c| c.auto_install)
+        .unwrap_or(false);
+    let conv_source = cfg.conv.as_ref().and_then(|c| c.source.clone());
+
+    // Resolve conv index if specified using Option A: conv:name@ver[:subpath]
+    if let Some(ref idx) = index_src {
+        if let Some(cr) = crate::conv::parse_conv_ref(idx) {
+            let resolved = crate::conv::resolve_path(&repo_root, &cr);
+            // If not present, optionally auto-install from sources map
+            if !resolved.exists() && conv_auto_install {
+                if let Some(src) = conv_source.as_ref() {
+                    let name_ver = format!("{}@{}", cr.name, cr.ver);
+                    let _ = crate::conv::install(&repo_root, &name_ver, src);
+                }
+            }
+            index = resolved
+                .strip_prefix(&repo_root)
+                .unwrap_or(resolved.as_path())
+                .to_string_lossy()
+                .to_string();
+            index_configured = true;
+        }
+    }
+
+    // If index is not set, but [conv.package] is present, derive it.
+    if !index_configured {
+        if let Some(conv_cfg) = cfg.conv.as_ref() {
+            if let Some(pkg) = conv_cfg.package.as_ref() {
+                if let Some((name, ver)) = rsplit_once_at(pkg, '@') {
+                    let subpath = conv_cfg
+                        .subpath
+                        .clone()
+                        .unwrap_or_else(|| "index.toml".to_string());
+                    let cr = crate::conv::ConvRef {
+                        name: name.to_string(),
+                        ver: ver.to_string(),
+                        subpath,
+                    };
+                    let resolved = crate::conv::resolve_path(&repo_root, &cr);
+                    if !resolved.exists() && conv_auto_install {
+                        if let Some(src) = conv_cfg.source.as_ref() {
+                            let mut src_str = src.clone();
+                            if src == "github" {
+                                if let Some((owner, repo)) = package_owner_repo(name) {
+                                    src_str = format!("gh:{}/{}@{}", owner, repo, ver);
+                                }
+                            }
+                            let _ = crate::conv::install(&repo_root, pkg, &src_str);
+                        }
+                    }
+                    index = resolved
+                        .strip_prefix(&repo_root)
+                        .unwrap_or(resolved.as_path())
+                        .to_string_lossy()
+                        .to_string();
+                    index_configured = true;
+                }
+            }
+        }
+    }
+
     Effective {
         repo_root,
         index,
@@ -191,6 +271,26 @@ pub fn resolve_effective(
         lb_before_fields,
         lb_in_fields,
         pattern_overrides,
+    }
+}
+
+pub fn rsplit_once_at(s: &str, ch: char) -> Option<(&str, &str)> {
+    let mut iter = s.rsplitn(2, ch);
+    let b = iter.next()?;
+    let a = iter.next()?;
+    Some((a, b))
+}
+
+pub fn package_owner_repo(name: &str) -> Option<(String, String)> {
+    // Accept forms: @owner/repo, owner/repo, repo
+    let s = name.strip_prefix('@').unwrap_or(name);
+    let mut parts = s.splitn(2, '/');
+    let first = parts.next()?;
+    if let Some(second) = parts.next() {
+        Some((first.to_string(), second.to_string()))
+    } else {
+        // No owner provided; use the same for owner and repo
+        Some((first.to_string(), first.to_string()))
     }
 }
 
@@ -293,5 +393,98 @@ scripts = "keep"
             eff.lb_in_fields.get("scripts").map(String::as_str),
             Some("keep")
         );
+    }
+
+    #[test]
+    fn test_conv_index_resolution_default_subpath() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let mut f = fs::File::create(root.join("rigra.toml")).unwrap();
+        writeln!(
+            f,
+            "{}",
+            r#"
+index = "conv:hyperedge@v0.1.0"
+scope = "repo"
+output = "json"
+            "#
+        )
+        .unwrap();
+
+        let eff = resolve_effective(root.to_str(), None, None, None, None, None, None);
+        assert!(eff.index_configured);
+        // Should resolve to cache path with default index.toml
+        let expected = root
+            .join(".rigra/conv/hyperedge@v0.1.0/index.toml")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(root.join(&eff.index).to_string_lossy(), expected);
+    }
+
+    #[test]
+    fn test_conv_auto_install_with_file_source() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        // Create a tar.gz for a simple convention with index.toml
+        let staged = root.join("staged");
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(staged.join("index.toml"), "# idx").unwrap();
+        let tgz = root.join("archive.tar.gz");
+        let status = std::process::Command::new("tar")
+            .current_dir(&staged)
+            .args(["-czf", tgz.to_str().unwrap(), "."])
+            .status()
+            .expect("tar exec");
+        assert!(status.success());
+
+        // rigra.toml enabling autoInstall and declaring single source
+        let mut f = fs::File::create(root.join("rigra.toml")).unwrap();
+        writeln!(
+            f,
+            "{}",
+            format!(
+                r#"
+[conv]
+autoInstall = true
+package = "myconv@v0.1.0"
+source = "file:{}"
+                "#,
+                tgz.to_string_lossy()
+            )
+        )
+        .unwrap();
+
+        // Resolve; should trigger auto-install and point to cache path
+        let eff = resolve_effective(root.to_str(), None, None, None, None, None, None);
+        let resolved = root.join(&eff.index);
+        assert!(resolved.exists());
+    }
+
+    #[test]
+    fn test_conv_without_index_uses_package_and_github_shorthand() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let mut f = fs::File::create(root.join("rigra.toml")).unwrap();
+        writeln!(
+            f,
+            "{}",
+            r#"
+[conv]
+autoInstall = false
+package = "@nazahex/conv-lib-ts-mono@v0.1.0"
+source = "github"
+            "#
+        )
+        .unwrap();
+
+        let eff = resolve_effective(root.to_str(), None, None, None, None, None, None);
+        assert!(eff.index_configured);
+        let expected = root
+            .join(".rigra/conv/@nazahex__conv-lib-ts-mono@v0.1.0/index.toml")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(root.join(&eff.index).to_string_lossy(), expected);
+        // No installation attempted since autoInstall=false; file won't exist.
     }
 }
