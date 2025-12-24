@@ -3,7 +3,8 @@
 //! Applies file/dir copy operations conditionally per `when` scope tokens.
 //! Uses simple recursive copying for directories.
 
-use crate::models::index::{Index, SyncRule};
+use crate::models::index::Index;
+use crate::models::sync_policy::{SyncPolicy, SyncRule};
 use crate::{config, utils};
 use serde_json::Value as Json;
 use std::fs;
@@ -43,8 +44,17 @@ pub fn run_sync(repo_root: &str, index_path: &str, scope: &str, write: bool) -> 
         .and_then(|s| s.hooks.as_ref().and_then(|h| h.post.clone()))
         .unwrap_or_default();
 
+    // Load external sync policy file
+    let pol_path_rel = index
+        .sync_ref
+        .as_ref()
+        .expect("index missing 'sync' policy reference");
+    let pol_path = idx_path.parent().unwrap().join(pol_path_rel);
+    let pol_str = fs::read_to_string(&pol_path).expect("failed to read sync policy file");
+    let policy: SyncPolicy = toml::from_str(&pol_str).expect("invalid sync policy TOML");
+
     let mut actions = Vec::new();
-    for rule in index.sync {
+    for rule in policy.sync {
         if ignore_ids.contains(&rule.id) {
             continue;
         }
@@ -151,7 +161,7 @@ fn copy_rule(rule: &SyncRule, src: &PathBuf, dst: &PathBuf, write: bool) -> (boo
 }
 
 /// Apply sync for a rule, performing copy or smart merge depending on rule.format and client config.
-fn apply_sync(
+pub fn apply_sync(
     _root: &Path,
     rule: &SyncRule,
     src: &PathBuf,
@@ -350,21 +360,26 @@ mod tests {
         let conv = root.join("conv");
         std::fs::create_dir_all(conv.join("templates")).unwrap();
         std::fs::write(conv.join("templates/a.txt"), b"hello").unwrap();
-        // index.toml with two rules: one for repo, one for lib
-        let index = r#"
-[[sync]]
-id = "r1"
-source = "templates/a.txt"
-target = "out/repo.txt"
-when = "repo|app"
+        // sync policy with two rules: one for repo, one for lib
+        let pol = r#"
+    [lint]
+    level = "info"
+    message = "Not synced yet. Please run rigra sync."
 
-[[sync]]
-id = "r2"
-source = "templates/a.txt"
-target = "out/lib.txt"
-when = "lib"
-"#;
-        std::fs::write(conv.join("index.toml"), index).unwrap();
+    [[sync]]
+    id = "r1"
+    source = "templates/a.txt"
+    target = "out/repo.txt"
+    when = "repo|app"
+
+    [[sync]]
+    id = "r2"
+    source = "templates/a.txt"
+    target = "out/lib.txt"
+    when = "lib"
+    "#;
+        std::fs::write(conv.join("sync.toml"), pol).unwrap();
+        std::fs::write(conv.join("index.toml"), "sync = \"sync.toml\"\n").unwrap();
 
         // run with scope=repo
         let actions = run_sync(
