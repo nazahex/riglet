@@ -52,4 +52,40 @@ pub enum Commands {
         #[arg(long)]
         index: Option<String>,
     },
+    /// Convention management (install/list/prune/path)
+    Conv {
+        #[command(subcommand)]
+        cmd: ConvCmd,
+    },
+}
+
+#[derive(Subcommand)]
+/// Subcommands for `rigra conv`
+pub enum ConvCmd {
+    /// Install a convention into cache
+    Install {
+        #[arg(long)]
+        repo_root: Option<String>,
+        /// Optional source override: gh:owner/repo@tag or file:/abs/path
+        source: Option<String>,
+        /// Optional name@version override for cache key
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List installed conventions
+    Ls {
+        #[arg(long)]
+        repo_root: Option<String>,
+    },
+    /// Prune all convention cache
+    Prune {
+        #[arg(long)]
+        repo_root: Option<String>,
+    },
+    /// Resolve a conv path (conv:name@ver[:subpath])
+    Path {
+        #[arg(long)]
+        repo_root: Option<String>,
+        conv: String,
+    },
 }
