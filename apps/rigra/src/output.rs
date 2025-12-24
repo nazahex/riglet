@@ -27,11 +27,17 @@ pub fn print_lint(res: &LintResult, output: &str) {
             use std::path::Path;
             let mut groups: BTreeMap<String, Vec<&crate::models::Issue>> = BTreeMap::new();
             for is in &res.issues {
-                let dir = Path::new(&is.file)
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "⌂ (root)".to_string());
+                let dir = match Path::new(&is.file).parent() {
+                    Some(p) => {
+                        let s = p.to_string_lossy().to_string();
+                        if s.is_empty() || s == "." {
+                            "⌂ (root)".to_string()
+                        } else {
+                            s
+                        }
+                    }
+                    None => "⌂ (root)".to_string(),
+                };
                 groups.entry(dir).or_default().push(is);
             }
             for (dir, items) in groups {
@@ -238,14 +244,14 @@ pub fn print_sync(actions: &[SyncAction], output: &str) {
                     if color {
                         println!(
                             "{} {} -> {} (rule={})",
-                            "📥 synced:".green().bold(),
+                            "✔ ⟦synced⟧".green().bold(),
                             shorten(&a.source),
                             a.target,
                             a.rule_id
                         );
                     } else {
                         println!(
-                            "📥 synced: {} -> {} (rule={})",
+                            "✔ ⟦synced⟧ {} -> {} (rule={})",
                             shorten(&a.source),
                             a.target,
                             a.rule_id
@@ -255,14 +261,14 @@ pub fn print_sync(actions: &[SyncAction], output: &str) {
                     if color {
                         println!(
                             "{} {} -> {} (rule={})",
-                            "↻ would sync:".cyan().bold(),
+                            "↻ ⟦pending⟧:".cyan().bold(),
                             shorten(&a.source),
                             a.target,
                             a.rule_id
                         );
                     } else {
                         println!(
-                            "↻ would sync: {} -> {} (rule={})",
+                            "↻ ⟦pending⟧: {} -> {} (rule={})",
                             shorten(&a.source),
                             a.target,
                             a.rule_id
@@ -299,11 +305,17 @@ pub fn compose_lint_grouped_lines(res: &LintResult, color: bool) -> Vec<String> 
     use std::path::Path;
     let mut groups: BTreeMap<String, Vec<&crate::models::Issue>> = BTreeMap::new();
     for is in &res.issues {
-        let dir = Path::new(&is.file)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "⌂ (root)".to_string());
+        let dir = match Path::new(&is.file).parent() {
+            Some(p) => {
+                let s = p.to_string_lossy().to_string();
+                if s.is_empty() || s == "." {
+                    "⌂ (root)".to_string()
+                } else {
+                    s
+                }
+            }
+            None => "⌂ (root)".to_string(),
+        };
         groups.entry(dir).or_default().push(is);
     }
     let mut lines = Vec::new();
