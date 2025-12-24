@@ -192,6 +192,7 @@ when = "lib"
         root.to_str().unwrap(),
         &format!("{}/index.toml", conv.file_name().unwrap().to_string_lossy()),
         "repo",
+        true,
     );
     assert!(actions.iter().any(|a| a.rule_id == "r1" && a.wrote));
     assert!(actions.iter().all(|a| a.rule_id != "r2"));
