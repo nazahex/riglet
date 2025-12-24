@@ -30,22 +30,18 @@ pub fn run_sync(repo_root: &str, index_path: &str, scope: &str, write: bool) -> 
     let sync_cfg_map = client_cfg
         .sync
         .as_ref()
-        .and_then(|s| s.config.as_ref())
-        .cloned()
+        .and_then(|s| s.config.clone())
+        .unwrap_or_default();
+    let ignore_ids = client_cfg
+        .sync
+        .as_ref()
+        .and_then(|s| s.ignore.clone())
         .unwrap_or_default();
     let post_hooks = client_cfg
         .sync
         .as_ref()
-        .and_then(|s| s.hooks.as_ref().and_then(|h| h.post.as_ref()))
-        .cloned()
+        .and_then(|s| s.hooks.as_ref().and_then(|h| h.post.clone()))
         .unwrap_or_default();
-    let ignore_ids: std::collections::HashSet<String> = client_cfg
-        .sync
-        .as_ref()
-        .and_then(|s| s.ignore.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
 
     let mut actions = Vec::new();
     for rule in index.sync {
@@ -99,20 +95,41 @@ fn resolve_path(idx_path: &Path, rel: &str) -> PathBuf {
 
 /// Copy one rule's source to target. Honors `overwrite` for files and
 /// performs recursive copies for directories.
+fn same_content(src: &Path, dst: &Path) -> bool {
+    if !dst.exists() || !src.exists() {
+        return false;
+    }
+    let (sm, dm) = match (fs::metadata(src), fs::metadata(dst)) {
+        (Ok(sm), Ok(dm)) => (sm, dm),
+        _ => return false,
+    };
+    if sm.len() != dm.len() {
+        return false;
+    }
+    match (fs::read(src), fs::read(dst)) {
+        (Ok(sb), Ok(db)) => sb == db,
+        _ => false,
+    }
+}
+
 fn copy_rule(rule: &SyncRule, src: &PathBuf, dst: &PathBuf, write: bool) -> (bool, bool) {
     let mut wrote = false;
     let mut would_write = false;
     if src.is_file() {
-        would_write = true;
-        if let Some(parent) = dst.parent() {
-            let _ = fs::create_dir_all(parent);
+        if same_content(src, dst) {
+            wrote = false;
+            would_write = false;
+        } else {
+            would_write = true;
+            if let Some(parent) = dst.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if write {
+                let _ = fs::copy(src, dst);
+                wrote = true;
+            }
         }
-        if write {
-            let _ = fs::copy(src, dst);
-        }
-        wrote = write;
     } else if src.is_dir() {
-        // Copy directory recursively
         if write {
             let _ = fs::create_dir_all(dst);
         }
