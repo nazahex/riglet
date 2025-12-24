@@ -126,52 +126,47 @@ pub fn run_format(
                     }
                 };
                 if let Some(ord) = ord_opt.as_ref() {
-                    let changed = apply_order_from(&mut json, &ord.top, &ord.sub);
-                    if changed {
-                        let mut s = serde_json::to_string_pretty(&json).unwrap();
-                        if strict_linebreak {
-                            let between = lb_between_groups_override
-                                .or(policy
-                                    .and_then(|p| p.linebreak.as_ref())
-                                    .and_then(|lb| lb.between_groups))
-                                .unwrap_or(false);
-                            let fields = merge_linebreak_fields(
-                                policy
-                                    .and_then(|p| p.linebreak.as_ref())
-                                    .map(|lb| &lb.before_fields),
-                                lb_before_fields_override,
-                            );
-                            let in_fields = merge_linebreak_fields(
-                                policy
-                                    .and_then(|p| p.linebreak.as_ref())
-                                    .map(|lb| &lb.in_fields),
-                                lb_in_fields_override,
-                            );
-                            s = apply_linebreaks(s, &ord.top, between, &fields);
-                            let keep_map = compute_in_field_keep_map(&data, &in_fields);
-                            s = apply_in_field_linebreaks(s, &in_fields, &keep_map);
-                        }
-                        if write {
+                    // Apply ordering (mutates json), then render and compare to original
+                    let _ = apply_order_from(&mut json, &ord.top, &ord.sub);
+                    let mut s = serde_json::to_string_pretty(&json).unwrap();
+                    if strict_linebreak {
+                        let between = lb_between_groups_override
+                            .or(policy
+                                .and_then(|p| p.linebreak.as_ref())
+                                .and_then(|lb| lb.between_groups))
+                            .unwrap_or(false);
+                        let fields = merge_linebreak_fields(
+                            policy
+                                .and_then(|p| p.linebreak.as_ref())
+                                .map(|lb| &lb.before_fields),
+                            lb_before_fields_override,
+                        );
+                        let in_fields = merge_linebreak_fields(
+                            policy
+                                .and_then(|p| p.linebreak.as_ref())
+                                .map(|lb| &lb.in_fields),
+                            lb_in_fields_override,
+                        );
+                        s = apply_linebreaks(s, &ord.top, between, &fields);
+                        let keep_map = compute_in_field_keep_map(&data, &in_fields);
+                        s = apply_in_field_linebreaks(s, &in_fields, &keep_map);
+                    }
+                    let changed = s.trim_end() != data.trim_end();
+                    if write {
+                        if changed {
                             let _ = fs::write(path, s.clone());
-                            return FormatResult {
-                                file: path.to_string_lossy().to_string(),
-                                changed: true,
-                                preview: None,
-                                original: if capture_old { Some(data) } else { None },
-                            };
-                        } else {
-                            return FormatResult {
-                                file: path.to_string_lossy().to_string(),
-                                changed: true,
-                                preview: Some(s),
-                                original: if capture_old { Some(data) } else { None },
-                            };
                         }
+                        return FormatResult {
+                            file: path.to_string_lossy().to_string(),
+                            changed,
+                            preview: None,
+                            original: if capture_old { Some(data) } else { None },
+                        };
                     } else {
                         return FormatResult {
                             file: path.to_string_lossy().to_string(),
-                            changed: false,
-                            preview: None,
+                            changed,
+                            preview: if changed { Some(s) } else { None },
                             original: if capture_old { Some(data) } else { None },
                         };
                     }
