@@ -59,6 +59,7 @@ meta = []
         None,
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
     );
     assert_eq!(results.len(), 1);
     let preview = results[0].preview.as_ref().unwrap();
@@ -66,6 +67,100 @@ meta = []
     assert!(preview.contains("\n  \"name\""));
     assert!(preview.contains("\n  \"version\""));
     assert!(preview.contains("\n  \"license\""));
+}
+
+#[test]
+fn format_precedence_write_vs_diff_check() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // Conventions dir with index + policy
+    let conv = root.join("conv");
+    fs::create_dir_all(&conv).unwrap();
+    fs::write(
+        conv.join("index.toml"),
+        r#"
+[[rules]]
+id = "pkgjson.root"
+patterns = ["package.json"]
+policy = "policy.toml"
+"#,
+    )
+    .unwrap();
+
+    // Policy with simple ordering
+    fs::write(
+        conv.join("policy.toml"),
+        r#"
+checks = []
+
+[order]
+top = [["name"],["version"],["license"]]
+"#,
+    )
+    .unwrap();
+
+    // package.json with shuffled keys
+    fs::write(
+        root.join("package.json"),
+        r#"{
+  "license": "MIT",
+  "version": "1.0.0",
+  "name": "x"
+}"#,
+    )
+    .unwrap();
+
+    // Case A: write=true (no diff/check) ⇒ file should be rewritten, no preview
+    let results_write = rigra::format::run_format(
+        root.to_str().unwrap(),
+        &format!("{}/index.toml", conv.file_name().unwrap().to_string_lossy()),
+        true,  // write
+        false, // capture_old
+        false, // strict_linebreak
+        None,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
+    assert_eq!(results_write.len(), 1);
+    assert!(results_write[0].changed);
+    assert!(results_write[0].preview.is_none());
+    // Confirm file content reordered
+    let after = fs::read_to_string(root.join("package.json")).unwrap();
+    assert!(after.contains("\n  \"name\""));
+    assert!(after.contains("\n  \"version\""));
+    assert!(after.contains("\n  \"license\""));
+
+    // Reset file to original shuffled order
+    fs::write(
+        root.join("package.json"),
+        r#"{
+  "license": "MIT",
+  "version": "1.0.0",
+  "name": "x"
+}"#,
+    )
+    .unwrap();
+
+    // Case B: diff/check override write=false ⇒ preview present, file unchanged
+    let results_diff = rigra::format::run_format(
+        root.to_str().unwrap(),
+        &format!("{}/index.toml", conv.file_name().unwrap().to_string_lossy()),
+        false, // effective write becomes false when diff/check true
+        true,  // capture_old to enable diff
+        false,
+        None,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    );
+    assert_eq!(results_diff.len(), 1);
+    assert!(results_diff[0].changed);
+    assert!(results_diff[0].preview.is_some());
+    let after2 = fs::read_to_string(root.join("package.json")).unwrap();
+    // unchanged since write=false
+    assert!(after2.contains("\n  \"license\""));
 }
 
 #[test]
@@ -168,6 +263,7 @@ scripts = "keep"
         None,                              // lb_between_groups_override
         &std::collections::HashMap::new(), // lb_before_fields_override
         &std::collections::HashMap::new(), // lb_in_fields_override
+        &std::collections::HashMap::new(), // pattern_overrides
     );
     assert_eq!(results.len(), 1);
     let preview = results[0].preview.as_ref().expect("expected preview");
@@ -230,6 +326,7 @@ level = "warn"
     let res = lint::run_lint(
         root.to_str().unwrap(),
         &format!("{}/index.toml", conv.file_name().unwrap().to_string_lossy()),
+        &std::collections::HashMap::new(),
     );
     assert!(res
         .issues
@@ -293,6 +390,7 @@ license = "none"
         true,         // strict linebreaks on
         Some(true),   // override between_groups
         &before_over, // override before_fields
+        &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
     );
     assert_eq!(results.len(), 1);
