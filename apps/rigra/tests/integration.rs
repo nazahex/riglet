@@ -171,8 +171,12 @@ fn sync_filters_by_scope_and_copies() {
     fs::create_dir_all(conv.join("templates")).unwrap();
     fs::write(conv.join("templates/t.txt"), b"hello").unwrap();
     fs::write(
-        conv.join("index.toml"),
+        conv.join("sync.toml"),
         r#"
+[lint]
+level = "info"
+message = "Not synced yet. Please run rigra sync."
+
 [[sync]]
 id = "r1"
 source = "templates/t.txt"
@@ -184,6 +188,14 @@ id = "r2"
 source = "templates/t.txt"
 target = "out/lib.txt"
 when = "lib"
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        conv.join("index.toml"),
+        r#"
+sync = "sync.toml"
 "#,
     )
     .unwrap();
@@ -327,6 +339,7 @@ level = "warn"
     let res = lint::run_lint(
         root.to_str().unwrap(),
         &format!("{}/index.toml", conv.file_name().unwrap().to_string_lossy()),
+        "repo",
         &std::collections::HashMap::new(),
     );
     assert!(res
