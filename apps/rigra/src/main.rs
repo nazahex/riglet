@@ -11,9 +11,11 @@ mod output;
 mod sync;
 mod utils;
 
+use crate::models::index::Index;
 use clap::Parser;
 use cli::{Cli, Commands};
 use owo_colors::OwoColorize;
+use std::fs;
 
 fn main() {
     let cli = Cli::parse();
@@ -36,6 +38,15 @@ fn main() {
                 None,
                 None,
             );
+            // Require index to be configured (no default)
+            if !eff.index_configured {
+                eprintln!(
+                    "{} {}",
+                    "❌ error:".red().bold(),
+                    "Index is not configured. Pass --index or add rigra.{toml,yaml}."
+                );
+                std::process::exit(2);
+            }
             // Friendly note if no rigra config was found
             if config::load_config(&eff.repo_root).is_none() {
                 eprintln!(
@@ -57,7 +68,36 @@ fn main() {
                 );
                 std::process::exit(2);
             }
-            let result = lint::run_lint(eff.repo_root.to_str().unwrap(), &eff.index);
+            // Emit single top info when default patterns from index are used (no overrides in rigra.toml)
+            if eff.output != "json" {
+                if let Ok(s) = fs::read_to_string(&idx_path) {
+                    if let Ok(ix) = toml::from_str::<Index>(&s) {
+                        let mut pat_set: std::collections::BTreeSet<String> =
+                            std::collections::BTreeSet::new();
+                        for r in ix.rules.iter() {
+                            if !eff.pattern_overrides.contains_key(&r.id) {
+                                for p in r.patterns.iter() {
+                                    pat_set.insert(p.clone());
+                                }
+                            }
+                        }
+                        if !pat_set.is_empty() {
+                            let joined =
+                                format!("[{}]", pat_set.into_iter().collect::<Vec<_>>().join(", "));
+                            eprintln!(
+                                "{} {}",
+                                "◆ ⟦info⟧".blue().bold(),
+                                format!("Using default patterns: {}", joined)
+                            );
+                        }
+                    }
+                }
+            }
+            let result = lint::run_lint(
+                eff.repo_root.to_str().unwrap(),
+                &eff.index,
+                &eff.pattern_overrides,
+            );
             output::print_lint(&result, &eff.output);
             if result.summary.errors > 0 {
                 std::process::exit(1);
@@ -76,10 +116,18 @@ fn main() {
                 index.as_deref(),
                 None,
                 output.as_deref(),
-                Some(write),
-                Some(diff),
-                Some(check),
+                if write { Some(true) } else { None },
+                if diff { Some(true) } else { None },
+                if check { Some(true) } else { None },
             );
+            if !eff.index_configured {
+                eprintln!(
+                    "{} {}",
+                    "❌ error:".red().bold(),
+                    "Index is not configured. Pass --index or add rigra.{toml,yaml}."
+                );
+                std::process::exit(2);
+            }
             if config::load_config(&eff.repo_root).is_none() {
                 eprintln!(
                     "{} {}",
@@ -99,18 +147,54 @@ fn main() {
                 );
                 std::process::exit(2);
             }
+            // Emit single top info when default patterns from index are used (no overrides in rigra.toml)
+            if eff.output != "json" {
+                if let Ok(s) = fs::read_to_string(&idx_path) {
+                    if let Ok(ix) = toml::from_str::<Index>(&s) {
+                        let mut pat_set: std::collections::BTreeSet<String> =
+                            std::collections::BTreeSet::new();
+                        for r in ix.rules.iter() {
+                            if !eff.pattern_overrides.contains_key(&r.id) {
+                                for p in r.patterns.iter() {
+                                    pat_set.insert(p.clone());
+                                }
+                            }
+                        }
+                        if !pat_set.is_empty() {
+                            let joined =
+                                format!("[{}]", pat_set.into_iter().collect::<Vec<_>>().join(", "));
+                            eprintln!(
+                                "{} {}",
+                                "◆ ⟦info⟧".blue().bold(),
+                                format!("Using default patterns: {}", joined)
+                            );
+                        }
+                    }
+                }
+            }
+            // CLI/config precedence at runtime:
+            // - If diff or check is enabled, force write=false for this run.
+            // - Otherwise respect write.
+            let eff_diff = eff.diff;
+            let eff_check = eff.check;
+            let eff_write = if eff_diff || eff_check {
+                false
+            } else {
+                eff.write
+            };
             let results = format::run_format(
                 eff.repo_root.to_str().unwrap(),
                 &eff.index,
-                eff.write,
-                eff.diff || eff.check,
+                eff_write,
+                eff_diff || eff_check,
                 eff.strict_linebreak,
                 eff.lb_between_groups,
                 &eff.lb_before_fields,
                 &eff.lb_in_fields,
+                &eff.pattern_overrides,
             );
-            output::print_format(&results, &eff.output, eff.write, eff.diff);
-            if eff.check && results.iter().any(|r| r.changed) {
+            output::print_format(&results, &eff.output, eff_write, eff_diff);
+            if eff_check && results.iter().any(|r| r.changed) {
                 std::process::exit(1);
             }
         }
