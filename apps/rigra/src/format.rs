@@ -54,6 +54,7 @@ pub fn run_format(
     lb_between_groups_override: Option<bool>,
     lb_before_fields_override: &std::collections::HashMap<String, String>,
     lb_in_fields_override: &std::collections::HashMap<String, String>,
+    patterns_override: &std::collections::HashMap<String, Vec<String>>,
 ) -> Vec<FormatResult> {
     let root = PathBuf::from(repo_root);
     let idx_path = root.join(index_path);
@@ -61,16 +62,33 @@ pub fn run_format(
     let index: Index = toml::from_str(&idx_str).expect("invalid index.toml");
 
     let mut results = Vec::new();
+    // Cache policies across rules by path to avoid repeated I/O and parse when shared
+    let mut policy_cache: HashMap<PathBuf, Policy> = HashMap::new();
     for ri in index.rules {
         // Load policy for this rule to discover per-target ordering rules
         let pol_path = idx_path.parent().unwrap().join(&ri.policy);
-        let policy: Option<Policy> = fs::read_to_string(&pol_path)
-            .ok()
-            .and_then(|s| toml::from_str::<Policy>(&s).ok());
+        let policy: Option<&Policy> = if let Some(p) = policy_cache.get(&pol_path) {
+            Some(p)
+        } else {
+            match fs::read_to_string(&pol_path)
+                .ok()
+                .and_then(|s| toml::from_str::<Policy>(&s).ok())
+            {
+                Some(p) => {
+                    policy_cache.insert(pol_path.clone(), p);
+                    policy_cache.get(&pol_path)
+                }
+                None => None,
+            }
+        };
 
-        // Collect all target files for this rule
+        // Collect all target files for this rule (use overrides when present)
+        let use_patterns: Vec<String> = patterns_override
+            .get(&ri.id)
+            .cloned()
+            .unwrap_or_else(|| ri.patterns.clone());
         let mut targets: Vec<PathBuf> = Vec::new();
-        for pat in ri.patterns.iter() {
+        for pat in use_patterns.iter() {
             let abs_glob = root.join(pat);
             let pattern = abs_glob.to_string_lossy().to_string();
             for entry in glob::glob(&pattern).expect("bad glob pattern") {
@@ -81,7 +99,7 @@ pub fn run_format(
         }
 
         // Process targets in parallel for throughput; gather deterministic order by file path
-        let ord_opt = policy.as_ref().and_then(|p| p.order.as_ref()).cloned();
+        let ord_opt = policy.and_then(|p| p.order.as_ref()).cloned();
         let rule_results: Vec<FormatResult> = targets
             .par_iter()
             .map(|path| {
@@ -114,20 +132,17 @@ pub fn run_format(
                         if strict_linebreak {
                             let between = lb_between_groups_override
                                 .or(policy
-                                    .as_ref()
                                     .and_then(|p| p.linebreak.as_ref())
                                     .and_then(|lb| lb.between_groups))
                                 .unwrap_or(false);
                             let fields = merge_linebreak_fields(
                                 policy
-                                    .as_ref()
                                     .and_then(|p| p.linebreak.as_ref())
                                     .map(|lb| &lb.before_fields),
                                 lb_before_fields_override,
                             );
                             let in_fields = merge_linebreak_fields(
                                 policy
-                                    .as_ref()
                                     .and_then(|p| p.linebreak.as_ref())
                                     .map(|lb| &lb.in_fields),
                                 lb_in_fields_override,
@@ -323,10 +338,10 @@ fn apply_linebreaks(
     if !between_groups || groups.is_empty() {
         return pretty;
     }
-    let mut group_first_keys: HashSet<String> = HashSet::new();
+    let mut group_first_keys: HashSet<&str> = HashSet::new();
     for grp in groups.iter() {
         if let Some(first) = grp.first() {
-            group_first_keys.insert(first.clone());
+            group_first_keys.insert(first.as_str());
         }
     }
     let mut out: Vec<String> = Vec::new();
