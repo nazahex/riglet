@@ -5,7 +5,9 @@
 
 use crate::models::index::Index;
 use crate::models::sync_policy::{SyncPolicy, SyncRule};
+use crate::models::RunError;
 use crate::{config, utils};
+use owo_colors::OwoColorize;
 use serde_json::Value as Json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,13 +22,61 @@ pub struct SyncAction {
 }
 
 /// Run sync actions for the given `scope`, producing a list of results.
-pub fn run_sync(repo_root: &str, index_path: &str, scope: &str, write: bool) -> Vec<SyncAction> {
+pub fn run_sync(
+    repo_root: &str,
+    index_path: &str,
+    scope: &str,
+    write: bool,
+) -> (Vec<SyncAction>, Vec<RunError>) {
     let root = PathBuf::from(repo_root);
     let idx_path = root.join(index_path);
-    let idx_str = fs::read_to_string(&idx_path).expect("failed to read index.toml");
-    let index: Index = toml::from_str(&idx_str).expect("invalid index.toml");
+    let mut errors: Vec<RunError> = Vec::new();
+    let idx_str = match fs::read_to_string(&idx_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Failed to read index: {} — {}. Pass --index or configure rigra.toml.",
+                    idx_path.to_string_lossy(),
+                    e
+                )
+            );
+            errors.push(RunError {
+                message: format!(
+                    "Failed to read index: {} — {}",
+                    idx_path.to_string_lossy(),
+                    e
+                ),
+            });
+            return (Vec::new(), errors);
+        }
+    };
+    let index: Index = match toml::from_str(&idx_str) {
+        Ok(ix) => ix,
+        Err(e) => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Failed to parse index TOML: {} — {}",
+                    idx_path.to_string_lossy(),
+                    e
+                )
+            );
+            errors.push(RunError {
+                message: format!(
+                    "Failed to parse index TOML: {} — {}",
+                    idx_path.to_string_lossy(),
+                    e
+                ),
+            });
+            return (Vec::new(), errors);
+        }
+    };
 
-    // Load client config (rigra.toml/yaml) for sync overrides
+    // Load client config (rigra.toml) for sync overrides
     let client_cfg = config::load_config(&root).unwrap_or_default();
     let sync_cfg_map = client_cfg
         .sync
@@ -45,13 +95,68 @@ pub fn run_sync(repo_root: &str, index_path: &str, scope: &str, write: bool) -> 
         .unwrap_or_default();
 
     // Load external sync policy file
-    let pol_path_rel = index
-        .sync_ref
-        .as_ref()
-        .expect("index missing 'sync' policy reference");
-    let pol_path = idx_path.parent().unwrap().join(pol_path_rel);
-    let pol_str = fs::read_to_string(&pol_path).expect("failed to read sync policy file");
-    let policy: SyncPolicy = toml::from_str(&pol_str).expect("invalid sync policy TOML");
+    let pol_path_rel = match index.sync_ref.as_ref() {
+        Some(r) => r,
+        None => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                "Index missing 'sync' policy reference. Add sync = \"sync.toml\" in index.toml."
+            );
+            errors.push(RunError {
+                message: "Index missing 'sync' policy reference".to_string(),
+            });
+            return (Vec::new(), errors);
+        }
+    };
+    let pol_path = idx_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(pol_path_rel);
+    let pol_str = match fs::read_to_string(&pol_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Failed to read sync policy: {} — {}",
+                    pol_path.to_string_lossy(),
+                    e
+                )
+            );
+            errors.push(RunError {
+                message: format!(
+                    "Failed to read sync policy: {} — {}",
+                    pol_path.to_string_lossy(),
+                    e
+                ),
+            });
+            return (Vec::new(), errors);
+        }
+    };
+    let policy: SyncPolicy = match toml::from_str(&pol_str) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Invalid sync policy TOML: {} — {}",
+                    pol_path.to_string_lossy(),
+                    e
+                )
+            );
+            errors.push(RunError {
+                message: format!(
+                    "Invalid sync policy TOML: {} — {}",
+                    pol_path.to_string_lossy(),
+                    e
+                ),
+            });
+            return (Vec::new(), errors);
+        }
+    };
 
     let mut actions = Vec::new();
     for rule in policy.sync {
@@ -68,8 +173,15 @@ pub fn run_sync(repo_root: &str, index_path: &str, scope: &str, write: bool) -> 
             .and_then(|c| c.target.clone())
             .unwrap_or_else(|| rule.target.clone());
         let dst = root.join(&dst_target);
-        let (wrote, would_write) =
-            apply_sync(&root, &rule, &src, &dst, sync_cfg_map.get(&rule.id), write);
+        let (wrote, would_write) = apply_sync(
+            &root,
+            &rule,
+            &src,
+            &dst,
+            sync_cfg_map.get(&rule.id),
+            write,
+            Some(&mut errors),
+        );
         actions.push(SyncAction {
             rule_id: rule.id,
             source: src.to_string_lossy().to_string(),
@@ -94,7 +206,7 @@ pub fn run_sync(repo_root: &str, index_path: &str, scope: &str, write: bool) -> 
             }
         }
     }
-    actions
+    (actions, errors)
 }
 
 /// Resolve a path relative to the index file location.
@@ -122,7 +234,13 @@ fn same_content(src: &Path, dst: &Path) -> bool {
     }
 }
 
-fn copy_rule(rule: &SyncRule, src: &PathBuf, dst: &PathBuf, write: bool) -> (bool, bool) {
+fn copy_rule(
+    rule: &SyncRule,
+    src: &PathBuf,
+    dst: &PathBuf,
+    write: bool,
+    errors: Option<&mut Vec<RunError>>,
+) -> (bool, bool) {
     let mut wrote = false;
     let mut would_write = false;
     if src.is_file() {
@@ -135,8 +253,43 @@ fn copy_rule(rule: &SyncRule, src: &PathBuf, dst: &PathBuf, write: bool) -> (boo
                 let _ = fs::create_dir_all(parent);
             }
             if write {
-                let _ = fs::copy(src, dst);
-                wrote = true;
+                match fs::copy(src, dst) {
+                    Ok(_) => {
+                        wrote = true;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} {}",
+                            "✖ ⟦error⟧".red().bold(),
+                            format!(
+                                "Failed to copy file '{}' -> '{}': {}",
+                                src.to_string_lossy(),
+                                dst.to_string_lossy(),
+                                e
+                            )
+                        );
+                        // capture as runtime error on copy failure
+                        // Note: still mark would_write as true to signal intended change
+                        // wrote remains false
+                        // Path context included in message
+                        //
+                        // (no change in action emission; errors aggregated for JSON output)
+                        //
+                        // Use concise message for reporting
+
+                        if let Some(errs) = errors {
+                            errs.push(RunError {
+                                message: format!(
+                                    "Failed to copy file '{}' -> '{}': {}",
+                                    src.to_string_lossy(),
+                                    dst.to_string_lossy(),
+                                    e
+                                ),
+                            });
+                        }
+                        wrote = false;
+                    }
+                }
             }
         }
     } else if src.is_dir() {
@@ -144,10 +297,11 @@ fn copy_rule(rule: &SyncRule, src: &PathBuf, dst: &PathBuf, write: bool) -> (boo
             let _ = fs::create_dir_all(dst);
         }
         if let Ok(entries) = fs::read_dir(src) {
+            let mut errs_opt = errors;
             for entry in entries.flatten() {
                 let p = entry.path();
                 let t = dst.join(entry.file_name());
-                let (_w, _would) = copy_rule(rule, &p, &t, write);
+                let (_w, _would) = copy_rule(rule, &p, &t, write, errs_opt.as_deref_mut());
                 if _would {
                     would_write = true;
                 }
@@ -168,16 +322,17 @@ pub fn apply_sync(
     dst: &PathBuf,
     client: Option<&config::SyncClientCfg>,
     write: bool,
+    errors: Option<&mut Vec<RunError>>,
 ) -> (bool, bool) {
     // Structured merge only when format=json and client merge config is present
     if let Some(ct) = rule.format.as_ref() {
         if ct.as_str().eq_ignore_ascii_case("json") {
             if let Some(mcfg) = client.and_then(|c| c.merge.as_ref()) {
-                return apply_json_merge(rule, src, dst, mcfg, write);
+                return apply_json_merge(rule, src, dst, mcfg, write, errors);
             }
         }
     }
-    copy_rule(rule, src, dst, write)
+    copy_rule(rule, src, dst, write, errors)
 }
 
 fn read_to_string(p: &Path) -> Option<String> {
@@ -209,8 +364,10 @@ fn apply_json_merge(
     dst: &PathBuf,
     mcfg: &config::SyncClientMergeCfg,
     write: bool,
+    errors: Option<&mut Vec<RunError>>,
 ) -> (bool, bool) {
     let mut wrote = false;
+    let mut errs_opt = errors;
     // will compute `would_write` only when differing from current
     let src_str = match read_to_string(src) {
         Some(s) => s,
@@ -219,7 +376,7 @@ fn apply_json_merge(
     let src_json: Json = match serde_json::from_str(&src_str) {
         Ok(j) => j,
         Err(_) => {
-            let (w, ww) = copy_rule(rule, src, dst, write);
+            let (w, ww) = copy_rule(rule, src, dst, write, errs_opt.as_deref_mut());
             return (w, ww);
         }
     };
@@ -326,10 +483,50 @@ fn apply_json_merge(
     if write {
         let cpath = checksum_path(&src.parent().unwrap_or_else(|| Path::new(".")), dst);
         ensure_parent(&cpath);
-        let _ = fs::write(&cpath, &out_fp);
+        if let Err(e) = fs::write(&cpath, &out_fp) {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Failed to write checksum '{}': {}",
+                    cpath.to_string_lossy(),
+                    e
+                )
+            );
+            if let Some(errs) = errs_opt.as_deref_mut() {
+                errs.push(RunError {
+                    message: format!(
+                        "Failed to write checksum '{}': {}",
+                        cpath.to_string_lossy(),
+                        e
+                    ),
+                });
+            }
+        }
         ensure_parent(dst);
-        if fs::write(dst, out_str).is_ok() {
-            wrote = true;
+        match fs::write(dst, out_str) {
+            Ok(_) => wrote = true,
+            Err(e) => {
+                eprintln!(
+                    "{} {}",
+                    "✖ ⟦error⟧".red().bold(),
+                    format!(
+                        "Failed to write merged file '{}': {}",
+                        dst.to_string_lossy(),
+                        e
+                    )
+                );
+                if let Some(errs) = errs_opt.as_deref_mut() {
+                    errs.push(RunError {
+                        message: format!(
+                            "Failed to write merged file '{}': {}",
+                            dst.to_string_lossy(),
+                            e
+                        ),
+                    });
+                }
+                wrote = false;
+            }
         }
     }
     (wrote, would_write)
@@ -382,7 +579,7 @@ mod tests {
         std::fs::write(conv.join("index.toml"), "sync = \"sync.toml\"\n").unwrap();
 
         // run with scope=repo
-        let actions = run_sync(
+        let (actions, _errs) = run_sync(
             root.to_str().unwrap(),
             &format!("{}/index.toml", conv.file_name().unwrap().to_string_lossy()),
             "repo",
