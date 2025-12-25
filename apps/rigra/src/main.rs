@@ -43,8 +43,8 @@ fn main() {
             if !eff.index_configured {
                 eprintln!(
                     "{} {}",
-                    "❌ error:".red().bold(),
-                    "Index is not configured. Pass --index or add rigra.{toml,yaml}."
+                    "✖ ⟦error⟧".red().bold(),
+                    "Index is not configured. Pass --index or add rigra.toml."
                 );
                 std::process::exit(2);
             }
@@ -53,7 +53,7 @@ fn main() {
                 eprintln!(
                     "{} {}",
                     "ℹ️  note:".blue().bold(),
-                    "No rigra.{toml,yaml} found; using defaults."
+                    "No rigra.toml found; using defaults."
                 );
             }
             // Friendly error if index file is missing
@@ -61,7 +61,7 @@ fn main() {
             if !idx_path.exists() {
                 eprintln!(
                     "{} {}",
-                    "❌ error:".red().bold(),
+                    "✖ ⟦error⟧".red().bold(),
                     format!(
                         "Index file not found: {} (pass --index or configure rigra.toml)",
                         idx_path.to_string_lossy()
@@ -94,13 +94,13 @@ fn main() {
                     }
                 }
             }
-            let result = lint::run_lint(
+            let (result, errors) = lint::run_lint(
                 eff.repo_root.to_str().unwrap(),
                 &eff.index,
                 &eff.scope,
                 &eff.pattern_overrides,
             );
-            output::print_lint(&result, &eff.output);
+            output::print_lint(&result, &eff.output, &errors);
             if result.summary.errors > 0 {
                 std::process::exit(1);
             }
@@ -125,8 +125,8 @@ fn main() {
             if !eff.index_configured {
                 eprintln!(
                     "{} {}",
-                    "❌ error:".red().bold(),
-                    "Index is not configured. Pass --index or add rigra.{toml,yaml}."
+                    "✖ ⟦error⟧".red().bold(),
+                    "Index is not configured. Pass --index or add rigra.toml."
                 );
                 std::process::exit(2);
             }
@@ -134,14 +134,14 @@ fn main() {
                 eprintln!(
                     "{} {}",
                     "ℹ️  note:".blue().bold(),
-                    "No rigra.{toml,yaml} found; using defaults."
+                    "No rigra.toml found; using defaults."
                 );
             }
             let idx_path = eff.repo_root.join(&eff.index);
             if !idx_path.exists() {
                 eprintln!(
                     "{} {}",
-                    "❌ error:".red().bold(),
+                    "✖ ⟦error⟧".red().bold(),
                     format!(
                         "Index file not found: {} (pass --index or configure rigra.toml)",
                         idx_path.to_string_lossy()
@@ -184,7 +184,7 @@ fn main() {
             } else {
                 eff.write
             };
-            let results = format::run_format(
+            let (results, errors) = format::run_format(
                 eff.repo_root.to_str().unwrap(),
                 &eff.index,
                 eff_write,
@@ -195,7 +195,7 @@ fn main() {
                 &eff.lb_in_fields,
                 &eff.pattern_overrides,
             );
-            output::print_format(&results, &eff.output, eff_write, eff_diff);
+            output::print_format(&results, &eff.output, eff_write, eff_diff, &errors);
             if eff_check && results.iter().any(|r| r.changed) {
                 std::process::exit(1);
             }
@@ -222,8 +222,8 @@ fn main() {
             if !eff.index_configured {
                 eprintln!(
                     "{} {}",
-                    "❌ error:".red().bold(),
-                    "Index is not configured. Pass --index or add rigra.{toml,yaml}."
+                    "✖ ⟦error⟧".red().bold(),
+                    "Index is not configured. Pass --index or add rigra.toml."
                 );
                 std::process::exit(2);
             }
@@ -231,14 +231,14 @@ fn main() {
                 eprintln!(
                     "{} {}",
                     "ℹ️  note:".blue().bold(),
-                    "No rigra.{toml,yaml} found; using defaults."
+                    "No rigra.toml found; using defaults."
                 );
             }
             let idx_path = eff.repo_root.join(&eff.index);
             if !idx_path.exists() || !idx_path.is_file() {
                 eprintln!(
                     "{} {}",
-                    "❌ error:".red().bold(),
+                    "✖ ⟦error⟧".red().bold(),
                     format!(
                         "Index file not found: {} (pass --index or configure rigra.toml)",
                         idx_path.to_string_lossy()
@@ -257,14 +257,15 @@ fn main() {
                 // CLI --write takes precedence; otherwise use [sync].write
                 write || cfg_sync_write
             };
-            let actions = sync::run_sync(
+            let (actions, errors) = sync::run_sync(
                 eff.repo_root.to_str().unwrap(),
                 &eff.index,
                 &eff.scope,
                 eff_write,
             );
-            output::print_sync(&actions, &eff.output);
-            if eff_check && actions.iter().any(|a| a.wrote) {
+            output::print_sync(&actions, &eff.output, &errors);
+            // In check mode, exit non-zero when any action would write
+            if eff_check && actions.iter().any(|a| a.would_write) {
                 std::process::exit(1);
             }
         }
@@ -306,12 +307,20 @@ fn main() {
                                 tag,
                             } => format!("{}@{}", repo, tag),
                             _ => {
-                                eprintln!("--name is required when using file: source without [conv.package]");
+                                eprintln!(
+                                    "{} {}",
+                                    "✖ ⟦error⟧".red().bold(),
+                                    "--name is required when using file: source without [conv.package]"
+                                );
                                 std::process::exit(2);
                             }
                         }
                     } else {
-                        eprintln!("missing install context: set [conv.package] in rigra.toml or pass --name");
+                        eprintln!(
+                            "{} {}",
+                            "✖ ⟦error⟧".red().bold(),
+                            "missing install context: set [conv.package] in rigra.toml or pass --name"
+                        );
                         std::process::exit(2);
                     };
 
@@ -322,6 +331,8 @@ fn main() {
                         s
                     } else {
                         eprintln!(
+                            "{} {}",
+                            "✖ ⟦error⟧".red().bold(),
                             "missing source: set [conv.source] in rigra.toml or pass --source"
                         );
                         std::process::exit(2);
@@ -344,7 +355,11 @@ fn main() {
                     match conv::install(&eff.repo_root, &name_ver, &src_str) {
                         Ok(path) => println!("installed: {}", path.to_string_lossy()),
                         Err(e) => {
-                            eprintln!("install failed: {}", e);
+                            eprintln!(
+                                "{} {}",
+                                "✖ ⟦error⟧".red().bold(),
+                                format!("install failed: {}", e)
+                            );
                             std::process::exit(2);
                         }
                     }
@@ -374,7 +389,11 @@ fn main() {
                         None,
                     );
                     if let Err(e) = conv::prune(&eff.repo_root) {
-                        eprintln!("prune failed: {}", e);
+                        eprintln!(
+                            "{} {}",
+                            "✖ ⟦error⟧".red().bold(),
+                            format!("prune failed: {}", e)
+                        );
                         std::process::exit(2);
                     } else {
                         println!("pruned");
@@ -397,7 +416,7 @@ fn main() {
                         let p = conv::resolve_path(&eff.repo_root, &cr);
                         println!("{}", p.to_string_lossy());
                     } else {
-                        eprintln!("invalid conv string");
+                        eprintln!("{} {}", "✖ ⟦error⟧".red().bold(), "invalid conv string");
                         std::process::exit(2);
                     }
                 }
