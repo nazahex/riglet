@@ -7,7 +7,7 @@ use crate::models::index::Index;
 use crate::models::sync_policy::{SyncPolicy, SyncRule};
 use crate::models::RunError;
 use crate::{config, utils};
-use owo_colors::OwoColorize;
+// colorization handled via utils::error_prefix; keep local color uses minimal
 use serde_json::Value as Json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ pub fn run_sync(
         Err(e) => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Failed to read index: {} — {}. Pass --index or configure rigra.toml.",
                     idx_path.to_string_lossy(),
@@ -58,7 +58,7 @@ pub fn run_sync(
         Err(e) => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Failed to parse index TOML: {} — {}",
                     idx_path.to_string_lossy(),
@@ -100,7 +100,7 @@ pub fn run_sync(
         None => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 "Index missing 'sync' policy reference. Add sync = \"sync.toml\" in index.toml."
             );
             errors.push(RunError {
@@ -118,7 +118,7 @@ pub fn run_sync(
         Err(e) => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Failed to read sync policy: {} — {}",
                     pol_path.to_string_lossy(),
@@ -140,7 +140,7 @@ pub fn run_sync(
         Err(e) => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Invalid sync policy TOML: {} — {}",
                     pol_path.to_string_lossy(),
@@ -260,7 +260,7 @@ fn copy_rule(
                     Err(e) => {
                         eprintln!(
                             "{} {}",
-                            "✖ ⟦error⟧".red().bold(),
+                            crate::utils::error_prefix(),
                             format!(
                                 "Failed to copy file '{}' -> '{}': {}",
                                 src.to_string_lossy(),
@@ -486,7 +486,7 @@ fn apply_json_merge(
         if let Err(e) = fs::write(&cpath, &out_fp) {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Failed to write checksum '{}': {}",
                     cpath.to_string_lossy(),
@@ -509,7 +509,7 @@ fn apply_json_merge(
             Err(e) => {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     format!(
                         "Failed to write merged file '{}': {}",
                         dst.to_string_lossy(),

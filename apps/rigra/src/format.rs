@@ -20,7 +20,7 @@
 use crate::models::index::Index;
 use crate::models::policy::{LineBreakRule, Policy};
 use crate::models::RunError;
-use owo_colors::OwoColorize;
+// colorization handled via utils::error_prefix for errors
 use rayon::prelude::*;
 use serde_json::{Map, Value as Json};
 use std::collections::{HashMap, HashSet};
@@ -66,7 +66,7 @@ pub fn run_format(
         Err(e) => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Failed to read index: {} — {}. Pass --index or configure rigra.toml.",
                     idx_path.to_string_lossy(),
@@ -88,7 +88,7 @@ pub fn run_format(
         Err(e) => {
             eprintln!(
                 "{} {}",
-                "✖ ⟦error⟧".red().bold(),
+                crate::utils::error_prefix(),
                 format!(
                     "Failed to parse index TOML: {} — {}",
                     idx_path.to_string_lossy(),
@@ -144,7 +144,7 @@ pub fn run_format(
                 Err(e) => {
                     eprintln!(
                         "{} {}",
-                        "✖ ⟦error⟧".red().bold(),
+                        crate::utils::error_prefix(),
                         format!(
                             "Invalid glob pattern for rule '{}': {} — {}",
                             ri.id, pattern, e
@@ -201,7 +201,7 @@ pub fn run_format(
                         Err(e) => {
                             eprintln!(
                                 "{} {}",
-                                "✖ ⟦error⟧".red().bold(),
+                                crate::utils::error_prefix(),
                                 format!(
                                     "Failed to serialize JSON for '{}': {} — skipping formatting",
                                     path.to_string_lossy(),
@@ -239,7 +239,7 @@ pub fn run_format(
                             if let Err(e) = fs::write(path, s.clone()) {
                                 eprintln!(
                                     "{} {}",
-                                    "✖ ⟦error⟧".red().bold(),
+                                    crate::utils::error_prefix(),
                                     format!(
                                         "Failed to write formatted file '{}': {}",
                                         path.to_string_lossy(),

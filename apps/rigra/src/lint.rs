@@ -10,7 +10,7 @@ use crate::models::sync_policy::SyncPolicy;
 use crate::models::{Issue, LintResult, RunError, Summary};
 use crate::sync;
 use glob::glob;
-use owo_colors::OwoColorize;
+// owo_colors imported elsewhere for printing; not needed here after centralizing error prefix
 use rayon::prelude::*;
 use serde_json::Value as Json;
 use std::collections::HashMap;
@@ -108,7 +108,10 @@ pub fn run_lint(
 
     // Evaluate sync status into lint using external policy
     if let Some(sync_ref) = index.sync_ref.as_ref() {
-        let pol_path = idx_path.parent().unwrap().join(sync_ref);
+        let pol_path = idx_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(sync_ref);
         if let Ok(pol_str) = fs::read_to_string(&pol_path) {
             if let Ok(policy) = toml::from_str::<SyncPolicy>(&pol_str) {
                 let defaults = policy.lint.unwrap_or_default();
@@ -236,8 +239,13 @@ fn lint_rule(
         };
         match toml::from_str::<Policy>(&pol_str) {
             Ok(p) => {
+                // Insert and then fetch without unwrap to avoid panic
                 policy_cache.insert(pol_path.clone(), p);
-                policy_cache.get(&pol_path).unwrap()
+                if let Some(pref) = policy_cache.get(&pol_path) {
+                    pref
+                } else {
+                    return;
+                }
             }
             Err(_) => {
                 issues.push(Issue {
@@ -266,7 +274,7 @@ fn lint_rule(
             Err(e) => {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     format!(
                         "Invalid glob pattern for rule '{}': {} — {}",
                         ri.id, pattern, e

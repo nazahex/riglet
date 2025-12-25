@@ -15,7 +15,7 @@ mod utils;
 use crate::models::index::Index;
 use clap::Parser;
 use cli::{Cli, Commands};
-use owo_colors::OwoColorize;
+// Colorization centralized in utils; no direct owo_colors usage here
 use std::fs;
 
 fn main() {
@@ -43,7 +43,7 @@ fn main() {
             if !eff.index_configured {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     "Index is not configured. Pass --index or add rigra.toml."
                 );
                 std::process::exit(2);
@@ -52,7 +52,7 @@ fn main() {
             if config::load_config(&eff.repo_root).is_none() {
                 eprintln!(
                     "{} {}",
-                    "ℹ️  note:".blue().bold(),
+                    crate::utils::note_prefix(),
                     "No rigra.toml found; using defaults."
                 );
             }
@@ -61,7 +61,7 @@ fn main() {
             if !idx_path.exists() {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     format!(
                         "Index file not found: {} (pass --index or configure rigra.toml)",
                         idx_path.to_string_lossy()
@@ -87,15 +87,16 @@ fn main() {
                                 format!("[{}]", pat_set.into_iter().collect::<Vec<_>>().join(", "));
                             eprintln!(
                                 "{} {}",
-                                "◆ ⟦info⟧".blue().bold(),
+                                crate::utils::info_prefix(),
                                 format!("Using default patterns: {}", joined)
                             );
                         }
                     }
                 }
             }
+            let repo_root_str = eff.repo_root.to_string_lossy().to_string();
             let (result, errors) = lint::run_lint(
-                eff.repo_root.to_str().unwrap(),
+                &repo_root_str,
                 &eff.index,
                 &eff.scope,
                 &eff.pattern_overrides,
@@ -125,7 +126,7 @@ fn main() {
             if !eff.index_configured {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     "Index is not configured. Pass --index or add rigra.toml."
                 );
                 std::process::exit(2);
@@ -133,7 +134,7 @@ fn main() {
             if config::load_config(&eff.repo_root).is_none() {
                 eprintln!(
                     "{} {}",
-                    "ℹ️  note:".blue().bold(),
+                    crate::utils::note_prefix(),
                     "No rigra.toml found; using defaults."
                 );
             }
@@ -141,7 +142,7 @@ fn main() {
             if !idx_path.exists() {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     format!(
                         "Index file not found: {} (pass --index or configure rigra.toml)",
                         idx_path.to_string_lossy()
@@ -167,7 +168,7 @@ fn main() {
                                 format!("[{}]", pat_set.into_iter().collect::<Vec<_>>().join(", "));
                             eprintln!(
                                 "{} {}",
-                                "◆ ⟦info⟧".blue().bold(),
+                                crate::utils::info_prefix(),
                                 format!("Using default patterns: {}", joined)
                             );
                         }
@@ -184,8 +185,9 @@ fn main() {
             } else {
                 eff.write
             };
+            let repo_root_str = eff.repo_root.to_string_lossy().to_string();
             let (results, errors) = format::run_format(
-                eff.repo_root.to_str().unwrap(),
+                &repo_root_str,
                 &eff.index,
                 eff_write,
                 eff_diff || eff_check,
@@ -222,7 +224,7 @@ fn main() {
             if !eff.index_configured {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     "Index is not configured. Pass --index or add rigra.toml."
                 );
                 std::process::exit(2);
@@ -230,7 +232,7 @@ fn main() {
             if config::load_config(&eff.repo_root).is_none() {
                 eprintln!(
                     "{} {}",
-                    "ℹ️  note:".blue().bold(),
+                    crate::utils::note_prefix(),
                     "No rigra.toml found; using defaults."
                 );
             }
@@ -238,7 +240,7 @@ fn main() {
             if !idx_path.exists() || !idx_path.is_file() {
                 eprintln!(
                     "{} {}",
-                    "✖ ⟦error⟧".red().bold(),
+                    crate::utils::error_prefix(),
                     format!(
                         "Index file not found: {} (pass --index or configure rigra.toml)",
                         idx_path.to_string_lossy()
@@ -257,12 +259,9 @@ fn main() {
                 // CLI --write takes precedence; otherwise use [sync].write
                 write || cfg_sync_write
             };
-            let (actions, errors) = sync::run_sync(
-                eff.repo_root.to_str().unwrap(),
-                &eff.index,
-                &eff.scope,
-                eff_write,
-            );
+            let repo_root_str = eff.repo_root.to_string_lossy().to_string();
+            let (actions, errors) =
+                sync::run_sync(&repo_root_str, &eff.index, &eff.scope, eff_write);
             output::print_sync(&actions, &eff.output, &errors);
             // In check mode, exit non-zero when any action would write
             if eff_check && actions.iter().any(|a| a.would_write) {
@@ -309,7 +308,7 @@ fn main() {
                             _ => {
                                 eprintln!(
                                     "{} {}",
-                                    "✖ ⟦error⟧".red().bold(),
+                                    crate::utils::error_prefix(),
                                     "--name is required when using file: source without [conv.package]"
                                 );
                                 std::process::exit(2);
@@ -318,7 +317,7 @@ fn main() {
                     } else {
                         eprintln!(
                             "{} {}",
-                            "✖ ⟦error⟧".red().bold(),
+                            crate::utils::error_prefix(),
                             "missing install context: set [conv.package] in rigra.toml or pass --name"
                         );
                         std::process::exit(2);
@@ -332,7 +331,7 @@ fn main() {
                     } else {
                         eprintln!(
                             "{} {}",
-                            "✖ ⟦error⟧".red().bold(),
+                            crate::utils::error_prefix(),
                             "missing source: set [conv.source] in rigra.toml or pass --source"
                         );
                         std::process::exit(2);
@@ -357,7 +356,7 @@ fn main() {
                         Err(e) => {
                             eprintln!(
                                 "{} {}",
-                                "✖ ⟦error⟧".red().bold(),
+                                crate::utils::error_prefix(),
                                 format!("install failed: {}", e)
                             );
                             std::process::exit(2);
@@ -391,7 +390,7 @@ fn main() {
                     if let Err(e) = conv::prune(&eff.repo_root) {
                         eprintln!(
                             "{} {}",
-                            "✖ ⟦error⟧".red().bold(),
+                            crate::utils::error_prefix(),
                             format!("prune failed: {}", e)
                         );
                         std::process::exit(2);
@@ -416,7 +415,7 @@ fn main() {
                         let p = conv::resolve_path(&eff.repo_root, &cr);
                         println!("{}", p.to_string_lossy());
                     } else {
-                        eprintln!("{} {}", "✖ ⟦error⟧".red().bold(), "invalid conv string");
+                        eprintln!("{} {}", crate::utils::error_prefix(), "invalid conv string");
                         std::process::exit(2);
                     }
                 }

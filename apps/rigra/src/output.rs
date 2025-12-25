@@ -72,32 +72,14 @@ pub fn print_lint(res: &LintResult, output: &str, errors: &[RunError]) {
                 }
                 for is in items {
                     let sev = match is.severity.as_str() {
-                        "error" => {
-                            if color {
-                                "⟦error⟧".red().bold().to_string()
-                            } else {
-                                "⟦error⟧".to_string()
-                            }
-                        }
-                        "warning" | "warn" => {
-                            if color {
-                                "⟦warn⟧".yellow().bold().to_string()
-                            } else {
-                                "⟦warn⟧".to_string()
-                            }
-                        }
-                        _ => {
-                            if color {
-                                "⟦info⟧".blue().bold().to_string()
-                            } else {
-                                "⟦info⟧".to_string()
-                            }
-                        }
+                        "error" => crate::utils::tag_error(color),
+                        "warning" | "warn" => crate::utils::tag_warn(color),
+                        _ => crate::utils::tag_info(color),
                     };
                     let icon = match is.severity.as_str() {
-                        "error" => "✖".red().to_string(),
-                        "warning" | "warn" => "▲".yellow().to_string(),
-                        _ => "◆".blue().to_string(),
+                        "error" => crate::utils::icon_error(color),
+                        "warning" | "warn" => crate::utils::icon_warn(color),
+                        _ => crate::utils::icon_info(color),
                     };
                     // Print only the basename under the directory header
                     let base = Path::new(&is.file)
@@ -353,8 +335,14 @@ fn build_naive_diff(old: Option<&str>, new: Option<&str>) -> Option<String> {
 
 /// Compose lint JSON object (pure) for testing/snapshot purposes.
 pub fn compose_lint_json(res: &LintResult) -> JsonVal {
-    // Directly serialize LintResult as JSON, keeping stable shape
-    serde_json::to_value(res).unwrap()
+    // Directly serialize LintResult as JSON, keeping stable shape without unwraps
+    match serde_json::to_value(res) {
+        Ok(v) => v,
+        Err(_) => json!({
+            "issues": [],
+            "summary": {"errors": 0, "warnings": 0, "infos": 0, "files": 0}
+        }),
+    }
 }
 
 /// Compose grouped human-readable lint lines (excluding summary) for testing.
