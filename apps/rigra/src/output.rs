@@ -3,23 +3,47 @@
 //! Supports `human` (default) and `json` outputs. The JSON form includes
 //! per-item fields and a top-level summary.
 
-use crate::models::LintResult;
+use crate::models::{LintResult, RunError};
 use crate::{format::FormatResult, sync::SyncAction};
 use owo_colors::OwoColorize;
 use serde_json::json;
 use serde_json::Value as JsonVal;
+
+fn try_print_json(val: &serde_json::Value) {
+    match serde_json::to_string_pretty(val) {
+        Ok(s) => println!("{}", s),
+        Err(e) => {
+            // Fallback structured error when serialization fails
+            let fb =
+                json!({"errors":[{"message": format!("Failed to serialize output JSON: {}", e)}]});
+            match serde_json::to_string_pretty(&fb) {
+                Ok(s2) => println!("{}", s2),
+                Err(_) => println!("{}", r#"{"errors":[{"message":"serialization failed"}]}"#),
+            }
+        }
+    }
+}
 
 fn use_colors(output: &str) -> bool {
     output != "json" && std::env::var_os("NO_COLOR").is_none()
 }
 
 /// Print lint results in the requested format.
-pub fn print_lint(res: &LintResult, output: &str) {
+pub fn print_lint(res: &LintResult, output: &str, errors: &[RunError]) {
     match output {
-        "json" => println!(
-            "{}",
-            serde_json::to_string_pretty(&compose_lint_json(res)).unwrap()
-        ),
+        "json" => {
+            let mut root = compose_lint_json(res);
+            let errs: Vec<_> = errors
+                .iter()
+                .map(|e| json!({"message": e.message}))
+                .collect();
+            if !errs.is_empty() {
+                if let Some(obj) = root.as_object_mut() {
+                    obj.insert("errors".to_string(), json!(errs));
+                }
+            }
+            try_print_json(&root);
+        }
         _ => {
             let color = use_colors(output);
             // Group by directory and print directory headers
@@ -111,11 +135,30 @@ pub fn print_lint(res: &LintResult, output: &str) {
 
 /// Print formatting results. When `write` is false, previews and diffs
 /// can be emitted; otherwise only file statuses are shown.
-pub fn print_format(results: &[FormatResult], output: &str, write: bool, diff: bool) {
+// removed duplicate import to avoid name redefinition warnings
+
+pub fn print_format(
+    results: &[FormatResult],
+    output: &str,
+    write: bool,
+    diff: bool,
+    errors: &[RunError],
+) {
     match output {
         "json" => {
             let out = compose_format_json(results, write, diff);
-            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            // Attach aggregated errors array when present
+            let errs: Vec<_> = errors
+                .iter()
+                .map(|e| json!({"message": e.message}))
+                .collect();
+            let mut root = out;
+            if !errs.is_empty() {
+                if let Some(obj) = root.as_object_mut() {
+                    obj.insert("errors".to_string(), json!(errs));
+                }
+            }
+            try_print_json(&root);
         }
         _ => {
             let color = use_colors(output);
@@ -172,7 +215,7 @@ pub fn print_format(results: &[FormatResult], output: &str, write: bool, diff: b
 }
 
 /// Print sync actions summarizing writes and skips.
-pub fn print_sync(actions: &[SyncAction], output: &str) {
+pub fn print_sync(actions: &[SyncAction], output: &str, errors: &[RunError]) {
     match output {
         "json" => {
             let items: Vec<_> = actions
@@ -193,8 +236,17 @@ pub fn print_sync(actions: &[SyncAction], output: &str) {
                 "wouldWrite": actions.iter().filter(|a| a.would_write && !a.wrote).count(),
                 "total": actions.len(),
             });
-            let out = json!({"results": items, "summary": summary});
-            println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            let errs: Vec<_> = errors
+                .iter()
+                .map(|e| json!({"message": e.message}))
+                .collect();
+            let mut out = json!({"results": items, "summary": summary});
+            if !errs.is_empty() {
+                if let Some(obj) = out.as_object_mut() {
+                    obj.insert("errors".to_string(), json!(errs));
+                }
+            }
+            try_print_json(&out);
         }
         _ => {
             let color = use_colors(output);
