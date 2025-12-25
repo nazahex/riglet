@@ -7,14 +7,15 @@ use crate::checks::run_checks;
 use crate::models::index::{Index, RuleIndex};
 use crate::models::policy::Policy;
 use crate::models::sync_policy::SyncPolicy;
-use crate::models::{Issue, LintResult, Summary};
+use crate::models::{Issue, LintResult, RunError, Summary};
 use crate::sync;
 use glob::glob;
+use owo_colors::OwoColorize;
 use rayon::prelude::*;
 use serde_json::Value as Json;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Run lint across files matched by the index.
 ///
@@ -28,50 +29,63 @@ pub fn run_lint(
     index_path: &str,
     scope: &str,
     patterns_override: &std::collections::HashMap<String, Vec<String>>,
-) -> LintResult {
+) -> (LintResult, Vec<RunError>) {
     let root = PathBuf::from(repo_root);
     let idx_path = root.join(index_path);
+    let mut errors: Vec<RunError> = Vec::new();
     let idx_str = match fs::read_to_string(&idx_path) {
         Ok(s) => s,
         Err(_) => {
-            return LintResult {
-                issues: vec![Issue {
-                    file: idx_path.to_string_lossy().to_string(),
-                    rule: "load-index".into(),
-                    severity: "error".into(),
-                    path: "$".into(),
-                    message: format!(
-                        "Index file not found. Looked at '{}'. Pass --index or add rigra.{{toml,yaml}}.",
-                        idx_path.to_string_lossy()
-                    ),
-                }],
-                summary: Summary {
-                    errors: 1,
-                    warnings: 0,
-                    infos: 0,
-                    files: 0,
+            errors.push(RunError {
+                message: format!("Failed to read index: {}", idx_path.to_string_lossy()),
+            });
+            return (
+                LintResult {
+                    issues: vec![Issue {
+                        file: idx_path.to_string_lossy().to_string(),
+                        rule: "load-index".into(),
+                        severity: "error".into(),
+                        path: "$".into(),
+                        message: format!(
+                            "Index file not found. Looked at '{}'. Pass --index or add rigra.toml.",
+                            idx_path.to_string_lossy()
+                        ),
+                    }],
+                    summary: Summary {
+                        errors: 1,
+                        warnings: 0,
+                        infos: 0,
+                        files: 0,
+                    },
                 },
-            };
+                errors,
+            );
         }
     };
     let index: Index = match toml::from_str(&idx_str) {
         Ok(ix) => ix,
         Err(_) => {
-            return LintResult {
-                issues: vec![Issue {
-                    file: idx_path.to_string_lossy().to_string(),
-                    rule: "parse-index".into(),
-                    severity: "error".into(),
-                    path: "$".into(),
-                    message: "Index file is not valid TOML".into(),
-                }],
-                summary: Summary {
-                    errors: 1,
-                    warnings: 0,
-                    infos: 0,
-                    files: 0,
+            errors.push(RunError {
+                message: format!("Failed to parse index TOML: {}", idx_path.to_string_lossy()),
+            });
+            return (
+                LintResult {
+                    issues: vec![Issue {
+                        file: idx_path.to_string_lossy().to_string(),
+                        rule: "parse-index".into(),
+                        severity: "error".into(),
+                        path: "$".into(),
+                        message: "Index file is not valid TOML".into(),
+                    }],
+                    summary: Summary {
+                        errors: 1,
+                        warnings: 0,
+                        infos: 0,
+                        files: 0,
+                    },
                 },
-            };
+                errors,
+            );
         }
     };
 
@@ -125,6 +139,7 @@ pub fn run_lint(
                             .and_then(|s| s.config.as_ref())
                             .and_then(|m| m.get(&rule.id)),
                         false,
+                        Some(&mut errors),
                     );
                     if would_write {
                         let sev = rule
@@ -162,15 +177,18 @@ pub fn run_lint(
             _ => infos += 1,
         }
     }
-    LintResult {
-        issues,
-        summary: Summary {
-            errors: errs,
-            warnings: warns,
-            infos,
-            files: files_count,
+    (
+        LintResult {
+            issues,
+            summary: Summary {
+                errors: errs,
+                warnings: warns,
+                infos,
+                files: files_count,
+            },
         },
-    }
+        errors,
+    )
 }
 fn is_rule_enabled(when: &str, scope: &str) -> bool {
     let w = when.trim();
@@ -192,7 +210,10 @@ fn lint_rule(
     policy_cache: &mut HashMap<PathBuf, Policy>,
     patterns_override: &std::collections::HashMap<String, Vec<String>>,
 ) {
-    let pol_path = idx_path.parent().unwrap().join(&ri.policy);
+    let pol_path = idx_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(&ri.policy);
     let policy: &Policy = if let Some(p) = policy_cache.get(&pol_path) {
         p
     } else {
@@ -240,7 +261,21 @@ fn lint_rule(
     for pat in use_patterns.iter() {
         let abs_glob = root.join(pat);
         let pattern = abs_glob.to_string_lossy().to_string();
-        for entry in glob(&pattern).expect("bad glob pattern") {
+        let itr = match glob(&pattern) {
+            Ok(it) => it,
+            Err(e) => {
+                eprintln!(
+                    "{} {}",
+                    "✖ ⟦error⟧".red().bold(),
+                    format!(
+                        "Invalid glob pattern for rule '{}': {} — {}",
+                        ri.id, pattern, e
+                    )
+                );
+                continue;
+            }
+        };
+        for entry in itr {
             if let Ok(p) = entry {
                 targets.push(p);
             }
