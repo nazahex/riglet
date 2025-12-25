@@ -1,6 +1,6 @@
 //! Configuration discovery and effective settings resolution.
 //!
-//! Rigra reads `rigra.toml|yaml|yml` from the repository root (or closest
+//! Rigra reads `rigra.toml` from the repository root (or closest
 //! ancestor) and merges it with CLI flags to produce an `Effective` config.
 //! Defaults:
 //! - `index`: `convention/index.toml`
@@ -36,7 +36,7 @@ pub struct LineBreakCfg {
 }
 
 #[derive(Debug, Default, Deserialize, Clone)]
-/// Root configuration loaded from `rigra.toml|yaml`.
+/// Root configuration loaded from `rigra.toml`.
 pub struct RigletConfig {
     pub index: Option<String>,
     pub scope: Option<String>,
@@ -124,15 +124,12 @@ pub struct SyncClientMergeCfg {
 
 /// Walk upward from `start` to detect the repository root.
 ///
-/// Stops when a `rigra.toml|yaml|yml` or a `.git` directory is found.
+/// Stops when a `rigra.toml` or a `.git` directory is found.
 pub fn detect_repo_root(start: &Path) -> PathBuf {
     // Walk up to find config or .git; else return start
     let mut cur = start;
     loop {
-        if cur.join("rigra.toml").exists()
-            || cur.join("rigra.yaml").exists()
-            || cur.join("rigra.yml").exists()
-        {
+        if cur.join("rigra.toml").exists() {
             return cur.to_path_buf();
         }
         if cur.join(".git").exists() {
@@ -145,21 +142,13 @@ pub fn detect_repo_root(start: &Path) -> PathBuf {
     }
 }
 
-/// Load `RigletConfig` from `rigra.toml` or `rigra.yaml|yml` if present.
+/// Load `RigletConfig` from `rigra.toml` if present.
 pub fn load_config(root: &Path) -> Option<RigletConfig> {
     let toml_path = root.join("rigra.toml");
     if toml_path.exists() {
         let s = fs::read_to_string(&toml_path).ok()?;
         let cfg: RigletConfig = toml::from_str(&s).ok()?;
         return Some(cfg);
-    }
-    for yml in ["rigra.yaml", "rigra.yml"] {
-        let p = root.join(yml);
-        if p.exists() {
-            let s = fs::read_to_string(&p).ok()?;
-            let cfg: RigletConfig = serde_yaml::from_str(&s).ok()?;
-            return Some(cfg);
-        }
     }
     None
 }
@@ -362,34 +351,6 @@ write = true
         assert_eq!(eff.index, "conventions/acme/index.toml");
         assert_eq!(eff.output, "json");
         assert!(eff.write);
-    }
-
-    #[test]
-    fn test_load_yaml_and_defaults() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        let mut f = fs::File::create(root.join("rigra.yaml")).unwrap();
-        writeln!(
-            f,
-            "{}",
-            r#"
-index: convention/index.toml
-scope: repo
-output: human
-format:
-  write: false
-  diff: false
-  check: false
-            "#
-        )
-        .unwrap();
-
-        let eff = resolve_effective(root.to_str(), None, None, None, None, None, None);
-        assert_eq!(eff.index, "convention/index.toml");
-        assert_eq!(eff.scope, "repo");
-        assert_eq!(eff.output, "human");
-        // strict_linebreak defaults to true when unspecified
-        assert!(eff.strict_linebreak);
     }
 
     #[test]
