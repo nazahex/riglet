@@ -98,44 +98,45 @@ pub fn install(repo_root: &Path, name_ver: &str, source_str: &str) -> Result<Pat
                 .join(".rigra")
                 .join("tmp")
                 .join(format!("{}-{}-{}.tar.gz", owner, repo, tag));
-            fs::create_dir_all(tmp.parent().unwrap()).map_err(|e| format!("prepare tmp: {}", e))?;
-            let st = std::process::Command::new("curl")
-                .args(["-fsSL", &url, "-o", tmp.to_str().unwrap()])
+            let tmp_parent = tmp.parent().unwrap_or(Path::new("."));
+            fs::create_dir_all(tmp_parent).map_err(|e| format!("prepare tmp: {}", e))?;
+            let mut cmd = std::process::Command::new("curl");
+            let st = cmd
+                .args(["-fsSL", &url, "-o"])
+                .arg(&tmp)
                 .status()
                 .map_err(|e| format!("curl exec failed: {}", e))?;
             if !st.success() {
-                return Err("curl download failed".to_string());
+                return Err(format!("curl download failed: exit {}", st));
             }
-            let st = std::process::Command::new("tar")
-                .args([
-                    "-xzf",
-                    tmp.to_str().unwrap(),
-                    "-C",
-                    dest_root.to_str().unwrap(),
-                    "--strip-components",
-                    "1",
-                ])
+            let mut tar = std::process::Command::new("tar");
+            let st = tar
+                .arg("-xzf")
+                .arg(&tmp)
+                .arg("-C")
+                .arg(&dest_root)
+                .arg("--strip-components")
+                .arg("1")
                 .status()
                 .map_err(|e| format!("tar exec failed: {}", e))?;
             if !st.success() {
-                return Err("tar extract failed".to_string());
+                return Err(format!("tar extract failed: exit {}", st));
             }
             Ok(dest_root)
         }
         Source::File { path } => {
-            let st = std::process::Command::new("tar")
-                .args([
-                    "-xzf",
-                    &path,
-                    "-C",
-                    dest_root.to_str().unwrap(),
-                    "--strip-components",
-                    "1",
-                ])
+            let mut tar = std::process::Command::new("tar");
+            let st = tar
+                .arg("-xzf")
+                .arg(&path)
+                .arg("-C")
+                .arg(&dest_root)
+                .arg("--strip-components")
+                .arg("1")
                 .status()
                 .map_err(|e| format!("tar exec failed: {}", e))?;
             if !st.success() {
-                return Err("tar extract failed".to_string());
+                return Err(format!("tar extract failed: exit {}", st));
             }
             Ok(dest_root)
         }
